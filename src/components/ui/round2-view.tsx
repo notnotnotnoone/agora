@@ -90,8 +90,8 @@ export function Round2View({ question, choices, pairs, models, onBack }: Round2V
                 prev.map((s, i) => {
                   if (i !== pairIndex) return s;
                   return turn === "persuader"
-                    ? { ...s, persuaderText: text, persuaderDone: true }
-                    : { ...s, persuadeeText: text, persuadeeDone: true };
+                    ? { ...s, persuaderText: text || s.persuaderText, persuaderDone: true }
+                    : { ...s, persuadeeText: text || s.persuadeeText, persuadeeDone: true };
                 })
               );
             } else if (event.type === "verdict") {

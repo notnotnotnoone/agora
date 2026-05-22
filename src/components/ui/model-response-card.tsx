@@ -67,7 +67,7 @@ function ResponseRow({
       transition={{ type: "spring", stiffness: 500, damping: 25 }}
     >
       <motion.div
-        className="flex flex-1 items-center rounded-md p-1 cursor-pointer"
+        className={`flex flex-1 items-center rounded-md p-1 ${hasOptionReasons ? "cursor-pointer" : "cursor-default"}`}
         onClick={() => hasOptionReasons && setExpanded((p) => !p)}
         whileHover={{ backgroundColor: "rgba(0,0,0,0.03)" }}
       >
@@ -91,6 +91,9 @@ function ResponseRow({
           )}
           {response.status === "streaming" && (
             <span className="text-blue-600 italic text-xs">streaming…</span>
+          )}
+          {response.status === "failed" && (
+            <span className="text-red-600 text-xs">error</span>
           )}
           {response.status === "done" && response.vote && (
             <span className={`rounded px-1.5 py-0.5 text-[11px] font-semibold ${badgeColor}`}>
@@ -119,8 +122,8 @@ function ResponseRow({
           >
             <ul className="py-1 space-y-2">
               {choices.map((choice) => {
-                const isChosen = choice === response.vote;
-                const reason = response.optionReasons[choice] ?? "";
+                const isChosen = choice.toLowerCase() === response.vote?.toLowerCase();
+                const reason = (response.optionReasons[choice] ?? "").trim();
                 const idx = choiceIndex(choice, choices);
                 const chipColor = BADGE_COLORS[idx] ?? "bg-muted text-muted-foreground";
                 return (

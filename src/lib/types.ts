@@ -17,6 +17,7 @@ export interface ResponseEntry {
   requestIndex: number;
   status: "pending" | "streaming" | "done" | "failed";
   reasoning: string;
+  optionReasons: Record<string, string>;
   vote: string | null;
   rawText: string;
   error?: string;
@@ -25,7 +26,7 @@ export interface ResponseEntry {
 export type RunEvent =
   | { type: "response_start"; modelId: string; requestIndex: number }
   | { type: "response_token"; modelId: string; requestIndex: number; token: string }
-  | { type: "response_done"; modelId: string; requestIndex: number; vote: string | null; reasoning: string }
+  | { type: "response_done"; modelId: string; requestIndex: number; vote: string | null; reasoning: string; optionReasons: Record<string, string> }
   | { type: "response_error"; modelId: string; requestIndex: number; error: string }
   | { type: "all_done" };
 

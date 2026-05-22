@@ -51,7 +51,9 @@ export function DebatePanel({ pair, state, choices, persuaderName, persuadeeName
             >
               <span className="text-xs text-muted-foreground">{persuaderName} argues</span>
               <div className="max-w-[80%] rounded-2xl rounded-tr-sm bg-primary/10 border border-primary/20 px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap">
-                {state.persuaderText || (
+                {state.persuaderDone ? (
+                  state.persuaderText || <span className="italic text-muted-foreground">(No response)</span>
+                ) : (
                   <span className="italic text-muted-foreground animate-pulse">thinking…</span>
                 )}
                 {!state.persuaderDone && state.persuaderText && (
@@ -73,7 +75,9 @@ export function DebatePanel({ pair, state, choices, persuaderName, persuadeeName
             >
               <span className="text-xs text-muted-foreground">{persuadeeName} responds</span>
               <div className="max-w-[80%] rounded-2xl rounded-tl-sm bg-card border border-border px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap">
-                {state.persuadeeText || (
+                {state.persuadeeDone ? (
+                  state.persuadeeText || <span className="italic text-muted-foreground">(No response)</span>
+                ) : (
                   <span className="italic text-muted-foreground animate-pulse">thinking…</span>
                 )}
                 {!state.persuadeeDone && state.persuadeeText && (

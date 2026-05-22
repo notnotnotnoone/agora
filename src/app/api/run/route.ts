@@ -24,7 +24,7 @@ function parseResponse(
   text: string,
   choices: string[]
 ): { vote: string | null; optionReasons: Record<string, string> } {
-  const answerMatch = text.match(/ANSWER:\s*(.+?)[\r\n]*$/im);
+  const answerMatch = text.match(/ANSWER:[ \t]*(.+?)[\r\n]*$/im);
   const rawAnswer = answerMatch ? answerMatch[1].trim() : null;
   const vote = rawAnswer
     ? (choices.find((c) => c.toLowerCase() === rawAnswer.toLowerCase()) ?? null)
@@ -33,7 +33,7 @@ function parseResponse(
   const optionReasons: Record<string, string> = {};
   for (const choice of choices) {
     const escaped = choice.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const pattern = new RegExp(`OPTION\\s*\\[${escaped}\\]:\\s*([\\s\\S]*?)(?=\\nOPTION\\s*\\[|\\nANSWER:|$)`, "i");
+    const pattern = new RegExp(`OPTION\\s*\\[${escaped}\\]:\\s*([\\s\\S]*?)(?=\\nOPTION\\s*\\[|\\n+ANSWER:|(?:\\n|$))`, "i");
     const match = text.match(pattern);
     optionReasons[choice] = match ? match[1].trim() : "";
   }

@@ -1,19 +1,10 @@
 import { loadModels } from "@/lib/config-loader";
+import { buildHeaders, encodeSSE } from "@/lib/llm";
 import type { ModelConfig, DebateEvent, DebatePair } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-function buildHeaders(model: ModelConfig): Record<string, string> {
-  const base: Record<string, string> = {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${model.apiKey}`,
-  };
-  if (model.headerParser === "openrouter") {
-    base["HTTP-Referer"] = "http://localhost:9563";
-    base["X-Title"] = "Agora";
-  }
-  return base;
-}
+const MAX_PAIRS = 20;
 
 function buildPersuaderSystem(persuaderVote: string, persuadeeVote: string): string {
   return `You argued for ${persuaderVote} on this moral dilemma. Your opponent chose ${persuadeeVote}.
@@ -29,7 +20,6 @@ function buildPersuadeeSystem(
   persuaderArgument: string,
   choices: string[]
 ): string {
-  const list = choices.join(", ");
   return `You originally chose ${persuadeeVote} on this moral dilemma, with this reasoning:
 ${persuadeeReasoning}
 
@@ -39,7 +29,7 @@ ${persuaderArgument}
 Respond to their argument honestly. Only change your vote if you find the argument genuinely compelling — don't flip just to be polite, but don't be stubborn either.
 You MUST format your response EXACTLY as:
 RESPONSE: <your reply to their argument>
-ANSWER: <one of: ${list}>`;
+ANSWER: <one of: ${choices.join(", ")}>`;
 }
 
 function parseArgument(text: string): string {
@@ -59,10 +49,6 @@ function parsePersuadeeResponse(
     ? (choices.find((c) => c.toLowerCase() === rawAnswer.toLowerCase()) ?? null)
     : null;
   return { response, vote };
-}
-
-function encodeSSE(event: DebateEvent): string {
-  return `data: ${JSON.stringify(event)}\n\n`;
 }
 
 async function streamLLMCall(
@@ -120,19 +106,19 @@ async function streamLLMCall(
   }
 }
 
+function findModel(models: ModelConfig[], id: string): ModelConfig {
+  return models.find((m) => m.id === id) ?? models[0];
+}
+
 export async function POST(req: Request) {
-  const { question, choices, pairs } = (await req.json()) as {
+  const { question, choices, pairs: rawPairs } = (await req.json()) as {
     question: string;
     choices: string[];
     pairs: DebatePair[];
   };
 
+  const pairs = rawPairs.slice(0, MAX_PAIRS);
   const models = loadModels();
-
-  function findModel(id: string): ModelConfig {
-    return models.find((m) => m.id === id) ?? models[0];
-  }
-
   const encoder = new TextEncoder();
   let closed = false;
 
@@ -151,8 +137,7 @@ export async function POST(req: Request) {
         if (closed) return;
         send({ type: "pair_start", pairIndex });
 
-        // Turn 1: Persuader argues
-        const persuaderModel = findModel(pair.persuaderId);
+        const persuaderModel = findModel(models, pair.persuaderId);
         const persuaderSystem = buildPersuaderSystem(pair.persuaderVote, pair.persuadeeVote);
         const persuaderFull = await streamLLMCall(
           persuaderModel,
@@ -165,8 +150,7 @@ export async function POST(req: Request) {
 
         if (closed) return;
 
-        // Turn 2: Persuadee responds
-        const persuadeeModel = findModel(pair.persuadeeId);
+        const persuadeeModel = findModel(models, pair.persuadeeId);
         const persuadeeSystem = buildPersuadeeSystem(
           pair.persuadeeVote,
           pair.persuaderVote,

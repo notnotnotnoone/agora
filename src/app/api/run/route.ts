@@ -1,4 +1,5 @@
 import { loadModels } from "@/lib/config-loader";
+import { buildHeaders, encodeSSE } from "@/lib/llm";
 import type { ModelConfig, RunEvent } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -15,18 +16,6 @@ You MUST pick exactly one of the following options: ${list}. Any other answer is
 The ANSWER line must contain exactly one of the listed options verbatim.`;
 }
 
-function buildHeaders(model: ModelConfig): Record<string, string> {
-  const base: Record<string, string> = {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${model.apiKey}`,
-  };
-  if (model.headerParser === "openrouter") {
-    base["HTTP-Referer"] = "http://localhost:9563";
-    base["X-Title"] = "Agora";
-  }
-  return base;
-}
-
 function parseResponse(
   text: string,
   choices: string[]
@@ -39,10 +28,6 @@ function parseResponse(
   const reasoningMatch = text.match(/REASONING:\s*([\s\S]*?)(?=\nANSWER:|$)/i);
   const reasoning = reasoningMatch ? reasoningMatch[1].trim() : text.trim();
   return { vote, reasoning };
-}
-
-function encodeSSE(event: RunEvent): string {
-  return `data: ${JSON.stringify(event)}\n\n`;
 }
 
 async function trySingleRequest(

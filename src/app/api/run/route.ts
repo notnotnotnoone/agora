@@ -6,35 +6,46 @@ export const dynamic = "force-dynamic";
 
 function buildSystemPrompt(choices: string[]): string {
   const list = choices.join(", ");
-  return `You are answering a moral dilemma question. Think through the situation carefully and reason as thoroughly as needed.
+  const optionLines = choices.map((c) => `OPTION [${c}]: <specific reason why you would or would not choose this option>`).join("\n");
+  return `You are answering a moral dilemma question. Think through every available option carefully.
 
-You MUST format your response EXACTLY as:
-REASONING: <your full reasoning, any length>
+You MUST format your response EXACTLY as follows — one OPTION block per choice, then ANSWER:
+
+${optionLines}
 ANSWER: <one of: ${list}>
 
-You MUST pick exactly one of the following options: ${list}. Any other answer is invalid.
-The ANSWER line must contain exactly one of the listed options verbatim.`;
+Rules:
+- You MUST write an OPTION block for EVERY option listed above. Do not skip any.
+- Each OPTION block must give a specific, concrete reason — not vague platitudes like "this seems right". Explain the actual moral reasoning for choosing or rejecting that option.
+- The ANSWER line must contain exactly one of the listed options verbatim: ${list}.`;
 }
 
 function parseResponse(
   text: string,
   choices: string[]
-): { vote: string | null; reasoning: string } {
+): { vote: string | null; optionReasons: Record<string, string> } {
   const answerMatch = text.match(/ANSWER:\s*(.+?)[\r\n]*$/im);
   const rawAnswer = answerMatch ? answerMatch[1].trim() : null;
   const vote = rawAnswer
     ? (choices.find((c) => c.toLowerCase() === rawAnswer.toLowerCase()) ?? null)
     : null;
-  const reasoningMatch = text.match(/REASONING:\s*([\s\S]*?)(?=\nANSWER:|$)/i);
-  const reasoning = reasoningMatch ? reasoningMatch[1].trim() : text.trim();
-  return { vote, reasoning };
+
+  const optionReasons: Record<string, string> = {};
+  for (const choice of choices) {
+    const escaped = choice.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(`OPTION\\s*\\[${escaped}\\]:\\s*([\\s\\S]*?)(?=\\nOPTION\\s*\\[|\\nANSWER:|$)`, "i");
+    const match = text.match(pattern);
+    optionReasons[choice] = match ? match[1].trim() : "";
+  }
+
+  return { vote, optionReasons };
 }
 
 async function trySingleRequest(
   model: ModelConfig,
   question: string,
   choices: string[]
-): Promise<{ vote: string; reasoning: string } | null> {
+): Promise<{ vote: string; optionReasons: Record<string, string> } | null> {
   try {
     const res = await fetch(`${model.baseUrl}/chat/completions`, {
       method: "POST",
@@ -75,9 +86,9 @@ async function trySingleRequest(
       }
     }
 
-    const { vote, reasoning } = parseResponse(fullText, choices);
+    const { vote, optionReasons } = parseResponse(fullText, choices);
     if (!vote) return null;
-    return { vote, reasoning };
+    return { vote, optionReasons };
   } catch {
     return null;
   }
@@ -147,8 +158,8 @@ export async function POST(req: Request) {
                 modelId: model.id,
                 requestIndex: mySlot,
                 vote: result.vote,
-                reasoning: result.reasoning,
-                optionReasons: {},
+                reasoning: "",
+                optionReasons: result.optionReasons,
               });
               if (validCount >= targetCount) finish();
               succeeded = true;

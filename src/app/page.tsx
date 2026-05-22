@@ -9,15 +9,9 @@ import { TldrPanel } from "@/components/ui/tldr-panel";
 import { Round2View } from "@/components/ui/round2-view";
 import { DILEMMAS, shuffleDilemma } from "@/lib/questions";
 import type { ModelConfigPublic, ResponseEntry, RunEvent, DebatePair } from "@/lib/types";
-
-function formatReasoning(entry: ResponseEntry): string {
-  const reasons = entry.optionReasons ?? {};
-  const keys = Object.keys(reasons);
-  if (keys.length > 0) {
-    return keys.map((k) => `${k}: ${reasons[k]}`).join("\n\n");
-  }
-  return entry.reasoning;
-}
+import { HistoryModal } from "@/components/ui/history-modal";
+import { saveRun } from "@/lib/history-db";
+import type { HistoryRun } from "@/lib/history-types";
 
 function buildDebatePairs(responses: ResponseEntry[]): DebatePair[] {
   const byVote = new Map<string, ResponseEntry[]>();
@@ -48,10 +42,10 @@ function buildDebatePairs(responses: ResponseEntry[]): DebatePair[] {
       pairs.push({
         persuaderId: persuader.modelId,
         persuaderVote: persuader.vote!,
-        persuaderReasoning: formatReasoning(persuader),
+        persuaderReasoning: persuader.reasoning,
         persuadeeId: persuadee.modelId,
         persuadeeVote: persuadee.vote!,
-        persuadeeReasoning: formatReasoning(persuadee),
+        persuadeeReasoning: persuadee.reasoning,
       });
     }
   }
@@ -76,7 +70,10 @@ export default function Home() {
 
   const [round2Enabled, setRound2Enabled] = useState(true);
   const [round2Active, setRound2Active] = useState(false);
+  const [round2Symmetric, setRound2Symmetric] = useState(false);
   const [debatePairs, setDebatePairs] = useState<DebatePair[]>([]);
+
+  const [historyModalOpen, setHistoryModalOpen] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -137,6 +134,21 @@ export default function Home() {
       if (err instanceof Error && err.name !== "AbortError") console.error(err);
     } finally {
       setTldrLoading(false);
+      // Save to history
+      const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+      const historyRun: HistoryRun = {
+        id: runId,
+        question: q,
+        choices: extractedChoices,
+        timestamp: Date.now(),
+        responses: collected.map((r) => ({
+          modelId: r.modelId,
+          vote: r.vote,
+          reasoning: r.reasoning,
+          optionReasons: r.optionReasons,
+        })),
+      };
+      saveRun(historyRun).catch(console.error);
     }
   };
 
@@ -271,6 +283,25 @@ export default function Home() {
     setRound2Active(true);
   }, [responses]);
 
+  const handleLoadRun = useCallback((run: HistoryRun) => {
+    setQuestion(run.question);
+    setChoices(run.choices);
+
+    const loaded: ResponseEntry[] = run.responses.map((r, idx) => ({
+      modelId: r.modelId,
+      requestIndex: idx,
+      status: "done" as const,
+      vote: r.vote,
+      reasoning: r.reasoning,
+      optionReasons: r.optionReasons,
+      rawText: "",
+    }));
+    setResponses(loaded);
+    setRunning(false);
+    setTldrVisible(false);
+    setRound2Active(false);
+  }, []);
+
   // Derive counts for consensus bar
   const voteCounts = new Map<string, number>();
   let pendingCount = 0;
@@ -305,6 +336,7 @@ export default function Home() {
           choices={choices}
           pairs={debatePairs}
           models={models}
+          symmetricMode={round2Symmetric}
           onBack={() => setRound2Active(false)}
         />
       ) : (
@@ -323,6 +355,12 @@ export default function Home() {
               <p className="text-sm text-muted-foreground">
                 Ethical dilemma arena — see how every AI votes
               </p>
+              <button
+                onClick={() => setHistoryModalOpen(true)}
+                className="text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+              >
+                History
+              </button>
             </div>
 
             {/* Dilemma input */}
@@ -332,11 +370,13 @@ export default function Home() {
                 running={running}
                 targetCount={targetCount}
                 round2Enabled={round2Enabled}
+                round2Symmetric={round2Symmetric}
                 onQuestionChange={setQuestion}
                 onTargetCountChange={setTargetCount}
                 onShuffle={() => setQuestion(shuffleDilemma(question))}
                 onRun={handleRun}
                 onRound2Toggle={setRound2Enabled}
+                onRound2SymmetricToggle={setRound2Symmetric}
               />
             </div>
 
@@ -398,6 +438,12 @@ export default function Home() {
                 </button>
               </div>
             )}
+
+          <HistoryModal
+            open={historyModalOpen}
+            onClose={() => setHistoryModalOpen(false)}
+            onLoadRun={handleLoadRun}
+          />
           </div>
         </motion.main>
       )}

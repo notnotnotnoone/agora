@@ -10,6 +10,15 @@ import { Round2View } from "@/components/ui/round2-view";
 import { DILEMMAS, shuffleDilemma } from "@/lib/questions";
 import type { ModelConfigPublic, ResponseEntry, RunEvent, DebatePair } from "@/lib/types";
 
+function formatReasoning(entry: ResponseEntry): string {
+  const reasons = entry.optionReasons ?? {};
+  const keys = Object.keys(reasons);
+  if (keys.length > 0) {
+    return keys.map((k) => `${k}: ${reasons[k]}`).join("\n\n");
+  }
+  return entry.reasoning;
+}
+
 function buildDebatePairs(responses: ResponseEntry[]): DebatePair[] {
   const byVote = new Map<string, ResponseEntry[]>();
   for (const r of responses) {
@@ -39,10 +48,10 @@ function buildDebatePairs(responses: ResponseEntry[]): DebatePair[] {
       pairs.push({
         persuaderId: persuader.modelId,
         persuaderVote: persuader.vote!,
-        persuaderReasoning: persuader.reasoning,
+        persuaderReasoning: formatReasoning(persuader),
         persuadeeId: persuadee.modelId,
         persuadeeVote: persuadee.vote!,
-        persuadeeReasoning: persuadee.reasoning,
+        persuadeeReasoning: formatReasoning(persuadee),
       });
     }
   }

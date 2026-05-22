@@ -148,6 +148,7 @@ export async function POST(req: Request) {
                 requestIndex: mySlot,
                 vote: result.vote,
                 reasoning: result.reasoning,
+                optionReasons: {},
               });
               if (validCount >= targetCount) finish();
               succeeded = true;

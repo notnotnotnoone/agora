@@ -219,6 +219,7 @@ export default function Home() {
               requestIndex: event.requestIndex,
               status: "pending",
               reasoning: "",
+              optionReasons: {},
               vote: null,
               rawText: "",
             };
@@ -227,7 +228,7 @@ export default function Home() {
             setResponses((prev) =>
               prev.map((r) =>
                 r.modelId === event.modelId && r.requestIndex === event.requestIndex
-                  ? { ...r, status: "done", vote: event.vote, reasoning: event.reasoning }
+                  ? { ...r, status: "done", vote: event.vote, reasoning: event.reasoning, optionReasons: event.optionReasons }
                   : r
               )
             );
@@ -237,6 +238,7 @@ export default function Home() {
               status: "done",
               vote: event.vote,
               reasoning: event.reasoning,
+              optionReasons: event.optionReasons,
               rawText: "",
             };
             collectedResponses.push(updated);

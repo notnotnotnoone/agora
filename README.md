@@ -46,8 +46,9 @@ Every run is saved to local **history**, so you can revisit or reload past debat
 
 - 🗳️ **Mass polling** — dozens of votes per dilemma, streamed live, no waiting on the slowest model
 - 📊 **Live consensus bar** — see YES/NO (or N-way) support shift in real time
-- 🔀 **Multi-provider by design** — mixes models from Cerebras, Groq, OpenRouter, Google, … with
-  per-model rate limits, so free tiers keep serving instead of rate-limiting you
+- 🔀 **Multi-provider by design** — mixes models from Cerebras, Groq, OpenRouter, Google, … routed
+  through [flexrouter](https://github.com/notnotnotnoone/flexrouter), so free tiers keep serving
+  instead of rate-limiting you
 - 🥊 **Round 2 debates** — watch models persuade each other and flip votes
 - 🧠 **10 built-in dilemmas** — classic trolley problems, transplant paradoxes, autonomous-car
   cases — or write your own
@@ -56,51 +57,49 @@ Every run is saved to local **history**, so you can revisit or reload past debat
 
 ## Quickstart
 
-Requires **Node 18+**.
+Requires **Node 18+** and a running [flexrouter](https://github.com/notnotnotnoone/flexrouter) server.
 
 ```bash
 npm install
 
-# Configure your models (see below), then:
+# Start flexrouter (see below), then:
 npm run dev        # http://localhost:3000
 ```
 
 ### Configuration
 
-Agora reads a `config.yaml` describing your providers and models. **API keys live only in this
-file, which is gitignored — nothing is hardcoded.** A minimal example:
+Agora doesn't manage providers or API keys itself — every model call goes through a local
+[flexrouter](https://github.com/notnotnotnoone/flexrouter) server, which pools free tiers,
+tracks rate limits, and rotates keys.
 
-```yaml
-providers:
-  - name: cerebras
-    base_url: https://api.cerebras.ai/v1
-    api_key: YOUR_CEREBRAS_KEY
-    header_parser: openai_compatible
-    models:
-      - name: llama3.1-8b
-        intelligence: 6
-        rate_limits: { rpm: 30, tpm: 60000 }
+1. Install flexrouter, add your models to its `config.yaml` (run `flexrouter doctor` to find it),
+   and save keys with `flexrouter keys add <provider>`:
 
-  - name: groq
-    base_url: https://api.groq.com/openai/v1
-    api_key: YOUR_GROQ_KEY
-    header_parser: openai_compatible
-    models:
-      - name: llama-3.3-70b-versatile
-        intelligence: 7
-        rate_limits: { rpm: 30, tpm: 12000 }
-```
+   ```bash
+   pip install git+https://github.com/notnotnotnoone/flexrouter.git
+   flexrouter keys add groq
+   flexrouter serve          # http://localhost:4891
+   ```
 
-Add as many providers/models as you like — the more you add, the richer the consensus. Most
+2. Start Agora. It polls **every model** flexrouter lists on `/v1/models`, calling each one by
+   its `provider/model` name. A model that's rate-limited or down is skipped and the vote is
+   retried on another.
+
+Optional environment variables (e.g. in `.env.local`):
+
+| Variable | Default | What it does |
+|---|---|---|
+| `FLEXROUTER_URL` | `http://localhost:4891` | Where flexrouter is running |
+| `FLEXROUTER_TOKEN` | — | flexrouter's `auth_token` / dashboard password, if you set one |
+| `FLEXROUTER_BUCKET` | `auto` | Bucket used to extract the choices from a dilemma |
+
+Add as many models to flexrouter as you like — the more you add, the richer the consensus. Most
 free AI tiers work great here.
 
 ## Tech
 
 Next.js (App Router) · React + TypeScript · Tailwind CSS · framer-motion · streaming API routes
-(Server-Sent Events) · YAML-driven multi-provider model config.
-
-> Part of a small family of AI projects exploring resilient, multi-provider LLM tooling — the
-> same routing idea powers [flexrouter](https://github.com/notnotnotnoone).
+(Server-Sent Events) · model routing via [flexrouter](https://github.com/notnotnotnoone/flexrouter).
 
 ## License
 

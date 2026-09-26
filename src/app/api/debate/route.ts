@@ -1,6 +1,6 @@
-import { loadModels } from "@/lib/config-loader";
-import { buildHeaders, encodeSSE } from "@/lib/llm";
-import type { ModelConfig, DebateEvent, DebatePair } from "@/lib/types";
+import { streamChat } from "@/lib/flexrouter";
+import { encodeSSE } from "@/lib/llm";
+import type { DebateEvent, DebatePair } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -51,63 +51,34 @@ function parsePersuadeeResponse(
   return { response, vote };
 }
 
+// modelId is the flexrouter "provider/model" id the vote came from, so each
+// side of the debate is argued by the same model that cast the vote.
 async function streamLLMCall(
-  model: ModelConfig,
+  modelId: string,
   systemPrompt: string,
   userMessage: string,
   onToken: (token: string) => void
 ): Promise<string> {
+  let partial = "";
   try {
-    const res = await fetch(`${model.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: buildHeaders(model),
-      body: JSON.stringify({
-        model: model.modelName,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userMessage },
-        ],
-        stream: true,
+    return await streamChat(
+      modelId,
+      [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userMessage },
+      ],
+      {
         temperature: 0.9,
-      }),
-    });
-
-    if (!res.ok || !res.body) return "";
-
-    let fullText = "";
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const chunk = dec.decode(value, { stream: true });
-      for (const line of chunk.split("\n")) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith("data:")) continue;
-        const jsonStr = trimmed.slice(5).trim();
-        if (jsonStr === "[DONE]") break;
-        try {
-          const parsed = JSON.parse(jsonStr);
-          const token: string = parsed?.choices?.[0]?.delta?.content ?? "";
-          if (token) {
-            fullText += token;
-            onToken(token);
-          }
-        } catch {
-          // skip malformed lines
-        }
+        onToken: (token) => {
+          partial += token;
+          onToken(token);
+        },
       }
-    }
-
-    return fullText;
+    );
   } catch {
-    return "";
+    // Keep whatever already streamed to the UI if the model failed mid-answer.
+    return partial;
   }
-}
-
-function findModel(models: ModelConfig[], id: string): ModelConfig {
-  return models.find((m) => m.id === id) ?? models[0];
 }
 
 export async function POST(req: Request) {
@@ -118,7 +89,6 @@ export async function POST(req: Request) {
   };
 
   const pairs = rawPairs.slice(0, MAX_PAIRS);
-  const models = loadModels();
   const encoder = new TextEncoder();
   let closed = false;
 
@@ -137,10 +107,9 @@ export async function POST(req: Request) {
         if (closed) return;
         send({ type: "pair_start", pairIndex });
 
-        const persuaderModel = findModel(models, pair.persuaderId);
         const persuaderSystem = buildPersuaderSystem(pair.persuaderVote, pair.persuadeeVote);
         const persuaderFull = await streamLLMCall(
-          persuaderModel,
+          pair.persuaderId,
           persuaderSystem,
           question,
           (token) => send({ type: "turn_token", pairIndex, turn: "persuader", token })
@@ -150,7 +119,6 @@ export async function POST(req: Request) {
 
         if (closed) return;
 
-        const persuadeeModel = findModel(models, pair.persuadeeId);
         const persuadeeSystem = buildPersuadeeSystem(
           pair.persuadeeVote,
           pair.persuaderVote,
@@ -159,7 +127,7 @@ export async function POST(req: Request) {
           choices
         );
         const persuadeeFull = await streamLLMCall(
-          persuadeeModel,
+          pair.persuadeeId,
           persuadeeSystem,
           question,
           (token) => send({ type: "turn_token", pairIndex, turn: "persuadee", token })

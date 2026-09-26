@@ -1,5 +1,5 @@
-import { loadModels } from "@/lib/config-loader";
-import { buildHeaders, encodeSSE } from "@/lib/llm";
+import { listModels, streamChat } from "@/lib/flexrouter";
+import { encodeSSE } from "@/lib/llm";
 import type { ModelConfig, RunEvent } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -47,49 +47,20 @@ async function trySingleRequest(
   choices: string[]
 ): Promise<{ vote: string; optionReasons: Record<string, string> } | null> {
   try {
-    const res = await fetch(`${model.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: buildHeaders(model),
-      body: JSON.stringify({
-        model: model.modelName,
-        messages: [
-          { role: "system", content: buildSystemPrompt(choices) },
-          { role: "user", content: question },
-        ],
-        stream: true,
-        temperature: 0.9,
-      }),
-    });
-
-    if (!res.ok || !res.body) return null;
-
-    let fullText = "";
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const chunk = dec.decode(value, { stream: true });
-      for (const line of chunk.split("\n")) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith("data:")) continue;
-        const jsonStr = trimmed.slice(5).trim();
-        if (jsonStr === "[DONE]") break;
-        try {
-          const parsed = JSON.parse(jsonStr);
-          const token: string = parsed?.choices?.[0]?.delta?.content ?? "";
-          if (token) fullText += token;
-        } catch {
-          // skip malformed lines
-        }
-      }
-    }
+    const fullText = await streamChat(
+      model.id,
+      [
+        { role: "system", content: buildSystemPrompt(choices) },
+        { role: "user", content: question },
+      ],
+      { temperature: 0.9 }
+    );
 
     const { vote, optionReasons } = parseResponse(fullText, choices);
     if (!vote) return null;
     return { vote, optionReasons };
   } catch {
+    // A pinned model that is busy or broken fails fast; the worker retries on the next one.
     return null;
   }
 }
@@ -101,7 +72,16 @@ export async function POST(req: Request) {
     targetCount: number;
   };
 
-  const models = loadModels();
+  let models: ModelConfig[];
+  try {
+    models = await listModels();
+  } catch (err) {
+    return Response.json({ error: (err as Error).message }, { status: 502 });
+  }
+  if (models.length === 0) {
+    return Response.json({ error: "flexrouter has no usable models configured" }, { status: 503 });
+  }
+
   const MAX_RETRIES = 3;
   const CONCURRENCY = Math.min(models.length, 5, targetCount);
   const MAX_TOTAL_ATTEMPTS = targetCount * MAX_RETRIES * 3;

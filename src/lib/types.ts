@@ -1,16 +1,16 @@
+// One model as flexrouter reports it on /v1/models. `id` is flexrouter's
+// "provider/model" name, which pins a request to exactly that model.
 export interface ModelConfig {
   id: string;
   modelName: string;
   provider: string;
-  baseUrl: string;
-  apiKey: string;
-  headerParser: string;
+  score: number;
   rpm: number;
-  intelligence: number;
-  requestCount: number;
+  vision: boolean;
 }
 
-export interface ModelConfigPublic extends Omit<ModelConfig, "apiKey"> {}
+// Nothing secret lives on ModelConfig any more; kept as an alias for the UI.
+export type ModelConfigPublic = ModelConfig;
 
 export interface ResponseEntry {
   modelId: string;

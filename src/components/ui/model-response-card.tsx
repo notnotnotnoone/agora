@@ -197,7 +197,7 @@ export function ModelResponseCard({ model, responses, choices }: ModelResponseCa
             >
               {model.provider}
             </span>
-            <span className="text-muted-foreground">int:{model.intelligence}</span>
+            <span className="text-muted-foreground">score:{model.score}</span>
             {Object.entries(voteSummary).map(([v, count]) => {
               const idx = choiceIndex(v, choices);
               return (

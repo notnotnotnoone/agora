@@ -1,105 +1,104 @@
 <div align="center">
 
-# Agora ⚖️
+# Agora
 
-**An ethical-dilemma arena for language models.**
-Pose a moral dilemma, poll *dozens* of AIs at once, watch a live consensus form —
-then make the dissenters debate the majority and see who flips.
+**Ask a moral dilemma to every free-tier model you have at once, and watch them vote.**
 
-<!-- TODO: drop a screen-recording GIF here — it's the single best thing you can add.
-     Record a full run (dilemma → consensus bar filling → TL;DR → Round 2 debate). -->
-![Agora demo](./docs/demo.gif)
+A showcase for [flexrouter](https://github.com/notnotnotnoone/flexrouter): one local address in
+front of Groq, Cerebras, OpenRouter, Google AI Studio and the rest, pooling their free tiers
+and failing over when one runs dry.
+
+![Agora after a run: consensus, votes with their failover chains, live routing, provider mix and the request log](./docs/screenshot.png)
+
+<sub>Screenshot from a local test setup with mock providers.</sub>
 
 </div>
 
 ---
 
-## What is this?
+## What it does
 
-Everyone argues about how AI "thinks" about ethics. Agora just **asks them — at scale — and shows you.**
+1. **Reads the dilemma.** A model picks out the options (`YES` / `NO`, or up to six others),
+   asked through a flexrouter *bucket*, so flexrouter chooses the model and fails over on its own.
+2. **Polls the crowd.** Each vote is pinned to a *different* model; no model votes twice.
+   Votes are spread across providers in turn, so one provider's rate limit doesn't take out
+   several votes at once. When a model is rate-limited, down, or answers off-format, the vote
+   moves on to the next unused model, and the card shows the chain: `✕ llama-3.1-8b → ● qwen-3-32b`.
+3. **Summarizes.** One of the best-scoring models writes a TL;DR, streamed live.
+4. **Round 2.** Each minority voter faces a majority voter: one argument, one reply, and a
+   chance to change its vote. Each side is argued by the model that cast that vote.
 
-Give it a dilemma ("A runaway trolley is heading toward 5 workers… do you pull the lever?").
-Agora fires that question at a whole pool of models across multiple providers, streams their
-YES/NO votes in as they land, and builds a **live consensus bar**. Then it summarizes the
-collective verdict — and, if the models disagree, runs a **Round 2** where minority-voters
-argue it out with the majority and can actually change their minds.
+Everything streams to the browser as it happens, and finished runs are saved in the browser.
 
-It's a toy, a research probe, and a genuinely fun thing to share — all at once.
+## What it shows off
 
-## How it works
-
-A single run is a four-stage pipeline, all streamed to the browser over Server-Sent Events:
-
-1. **Extract choices** — a model reads the dilemma and pins down the actual options (e.g. `YES` / `NO`).
-2. **Poll the swarm** — the question is sent to many models (default **20** requests, spread
-   across your configured providers). Each response streams back with a **vote**, its
-   **reasoning**, and per-option notes. The **consensus bar** fills up live.
-3. **TL;DR** — a synthesizer model streams a plain-English summary of where the crowd landed and why.
-4. **Round 2 · The Debate** *(optional)* — Agora pairs each minority-voter against a random
-   majority-voter. They argue for up to 5 turns; a model can **flip** its vote mid-debate, and
-   the UI shows exactly who got persuaded. There's also a *symmetric* mode for a genuine
-   two-way back-and-forth instead of pure persuasion.
-
-Every run is saved to local **history**, so you can revisit or reload past debates.
-
-## Features
-
-- 🗳️ **Mass polling** — dozens of votes per dilemma, streamed live, no waiting on the slowest model
-- 📊 **Live consensus bar** — see YES/NO (or N-way) support shift in real time
-- 🔀 **Multi-provider by design** — mixes models from Cerebras, Groq, OpenRouter, Google, … routed
-  through [flexrouter](https://github.com/notnotnotnoone/flexrouter), so free tiers keep serving
-  instead of rate-limiting you
-- 🥊 **Round 2 debates** — watch models persuade each other and flip votes
-- 🧠 **10 built-in dilemmas** — classic trolley problems, transplant paradoxes, autonomous-car
-  cases — or write your own
-- 📜 **Run history** — every debate saved locally and reloadable
-- ✨ Smooth, animated UI (framer-motion) built on Next.js
+| Panel | flexrouter feature |
+|---|---|
+| **Routing** | Every model flexrouter knows, with its live status (ready, cooling down with a countdown, needs a key) from `/v1/models`, and what each is doing in this run. |
+| **Votes** | Per-model routing: `provider/model` names pin a request to one model. The failover chain on each card is Agora moving on when flexrouter reports a model busy. |
+| **Provider mix** | Free-tier pooling: votes and tokens per provider. |
+| **Spent** | flexrouter's spend tracking, from `/api/status`. On free tiers, `$0.00`. |
+| **Requests** | A port of flexrouter's own Requests page: every call Agora made, its flexrouter request id, tokens, latency and outcome. Click a row for its journey (each failed attempt with the provider's message) and a link to the full trace in flexrouter's dashboard. |
 
 ## Quickstart
 
-Requires **Node 18+** and a running [flexrouter](https://github.com/notnotnotnoone/flexrouter) server.
+Requires **Node 20.9+** and **Python 3.11+**.
 
 ```bash
-npm install
+# 1. flexrouter: install, add models to its config.yaml, save keys, start it
+pip install git+https://github.com/notnotnotnoone/flexrouter.git
+flexrouter doctor            # prints where its config.yaml lives
+flexrouter keys add groq     # once per provider
+flexrouter serve             # http://localhost:4891
 
-# Start flexrouter (see below), then:
-npm run dev        # http://localhost:3000
+# 2. Agora
+npm install
+npm run dev                  # http://localhost:3000
 ```
 
-### Configuration
+Agora uses every model in flexrouter's config, so the more free-tier models you add there,
+the bigger the crowd. See flexrouter's
+[free tier stacking](https://github.com/notnotnotnoone/flexrouter#free-tier-stacking) section
+for a starting list.
 
-Agora doesn't manage providers or API keys itself — every model call goes through a local
-[flexrouter](https://github.com/notnotnotnoone/flexrouter) server, which pools free tiers,
-tracks rate limits, and rotates keys.
+### Settings
 
-1. Install flexrouter, add your models to its `config.yaml` (run `flexrouter doctor` to find it),
-   and save keys with `flexrouter keys add <provider>`:
-
-   ```bash
-   pip install git+https://github.com/notnotnotnoone/flexrouter.git
-   flexrouter keys add groq
-   flexrouter serve          # http://localhost:4891
-   ```
-
-2. Start Agora. It polls **every model** flexrouter lists on `/v1/models`, calling each one by
-   its `provider/model` name. A model that's rate-limited or down is skipped and the vote is
-   retried on another.
-
-Optional environment variables (e.g. in `.env.local`):
+All optional; put them in `.env.local` (see [`.env.example`](./.env.example)).
 
 | Variable | Default | What it does |
 |---|---|---|
 | `FLEXROUTER_URL` | `http://localhost:4891` | Where flexrouter is running |
-| `FLEXROUTER_TOKEN` | — | flexrouter's `auth_token` / dashboard password, if you set one |
-| `FLEXROUTER_BUCKET` | `auto` | Bucket used to extract the choices from a dilemma |
+| `FLEXROUTER_TOKEN` | none | flexrouter's `auth_token` or dashboard password, if set |
+| `FLEXROUTER_BUCKET` | `auto` | Bucket used to read a dilemma's options |
+| `FLEXROUTER_DASHBOARD_URL` | `FLEXROUTER_URL` | Where the browser opens flexrouter's dashboard |
 
-Add as many models to flexrouter as you like — the more you add, the richer the consensus. Most
-free AI tiers work great here.
+## How it's built
 
-## Tech
+```
+src/
+  app/
+    api/run/route.ts          round 1 as one SSE stream: options → votes → TL;DR
+    api/debate/route.ts       round 2 as an SSE stream
+    api/flexrouter/route.ts   live roster and spend, polled by the page
+    page.tsx, layout.tsx, globals.css
+  lib/
+    server/flexrouter.ts      the only code that talks to flexrouter
+    server/run.ts             vote scheduling: one model per vote, failover, summary
+    server/debate.ts          round 2
+    server/validate.ts        request body checks
+    prompts.ts                every prompt, and the parsers for the replies
+    arena.ts                  the page's state, as a reducer over server events
+    sse.ts                    SSE encode/decode, shared by server and browser
+  hooks/                      useArena (runs the streams), useFlexrouter (polling)
+  components/                 one file per panel
+```
 
-Next.js (App Router) · React + TypeScript · Tailwind CSS · framer-motion · streaming API routes
-(Server-Sent Events) · model routing via [flexrouter](https://github.com/notnotnotnoone/flexrouter).
+Agora holds no API keys and knows nothing about any provider: flexrouter does all of that.
+The styling is flexrouter's dashboard design, ported, so the two read as one product.
+
+```bash
+npm run lint && npm run typecheck && npm test && npm run build
+```
 
 ## License
 

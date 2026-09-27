@@ -213,11 +213,14 @@ Treat these as proposals. They are in `d430731`, and the owner has not signed of
 
 ---
 
-## Open questions for the owner
+## Open questions for the owner (answered 26 Sep 2026, local session)
 
-1. **§9:** can a model vote more than once, or does one-vote-per-model stay (with flexrouter picking via an exclude list)?
-2. Merge Agora's branch as-is first, or hold it until §12 is done?
-3. Keep Claude's unapproved choices above, or revisit any (especially dropping the 5-turn / symmetric debate)?
+1. **§9 → (b) one vote per model.** Each vote asks a bucket with an exclude list of the models that already voted; flexrouter picks and fails over. §11.4 (the exclude list + ADR) is in scope.
+2. **Hold** Agora's branch until §12 is done; one PR when it works end to end.
+3. **Keep** the unapproved choices, **except: restore the 5-turn and symmetric debate modes.**
+4. flexrouter's 8 unpushed local commits (Sessions 7/9/10): **fix, then push**. Pushed as `415f617`, with fixes for the two tests they broke (a model-level 403 marked the whole key Needs you, against ADR 0016; `set-retired` had no CSS rule). Three failures already on GitHub `master` remain: `test_page_links_every_area`, `test_a_429_is_classified_as_too_fast`, `test_a_provider_failure_is_recorded_as_an_attempt`.
+
+Local note: run tests with `uv run python -m pytest -n auto`; `uv run pytest` fails with "trampoline failed to canonicalize script path" since the repo folder was renamed.
 
 ---
 
@@ -238,3 +241,4 @@ The owner's words, verbatim, in order.
 8. "u write the flexrouter endpoints in a PR"
 9. "Hey, do you want to handoff to a local session?"
 10. "MAKE ME A HANDOFF FILE WITH A LIST OF EVERYTHING WE DECIDED, LIKE IN THE GRILL, AND STUFF"
+11. (local session) §9 → "One vote per model"; flexrouter → "Push them, then branch"; Agora → "Hold until §12"; choices → "Restore 5-turn/symmetric"; the two broken tests → "Fix both, then push".

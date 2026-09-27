@@ -1,3 +1,12 @@
+/**
+ * Epoch ms from one of flexrouter's trace times. flexrouter writes them as
+ * "2026-09-26T10:00:00.000+00:00Z", an offset and a Z, which Date.parse
+ * rejects; drop the Z when an offset is already there.
+ */
+export function parseAt(at: string): number {
+  return Date.parse(/[+-]\d\d:\d\dZ$/.test(at) ? at.slice(0, -1) : at);
+}
+
 export function clock(epochMs: number): string {
   return new Date(epochMs).toLocaleTimeString([], { hour12: false });
 }

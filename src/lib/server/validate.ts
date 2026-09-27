@@ -1,4 +1,4 @@
-import type { DebatePair } from "../types";
+import type { DebateMode, DebatePair } from "../types";
 import { MAX_PAIRS } from "../debate";
 import { MAX_CHOICES, MIN_CHOICES } from "../prompts";
 import { MAX_VOTES } from "./run";
@@ -14,11 +14,19 @@ type Result<T> = { ok: true; value: T } | { ok: false; error: string };
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
 const isText = (v: unknown, max: number): v is string => typeof v === "string" && v.length <= max;
 
+/** A browser-made run id; it ends up in flexrouter's client tag, so keep it plain. */
+export const isRunId = (v: unknown): v is string => typeof v === "string" && /^[A-Za-z0-9-]{1,40}$/.test(v);
+
+/** A flexrouter request id ("req_" + hex), safe to put in a URL path. */
+export const isRequestId = (v: unknown): v is string => typeof v === "string" && /^req_[A-Za-z0-9]{1,64}$/.test(v);
+
+const MODES: readonly DebateMode[] = ["persuade", "symmetric"];
+
 function question(v: unknown): string | null {
   return isText(v, MAX_QUESTION) && v.trim() ? v.trim() : null;
 }
 
-export function parseRunBody(body: unknown): Result<{ question: string; votes: number }> {
+export function parseRunBody(body: unknown): Result<{ question: string; votes: number; runId: string }> {
   if (!isRecord(body)) return { ok: false, error: "Expected a JSON object" };
   const q = question(body.question);
   if (!q) return { ok: false, error: `question must be 1-${MAX_QUESTION} characters` };
@@ -26,7 +34,8 @@ export function parseRunBody(body: unknown): Result<{ question: string; votes: n
   if (typeof votes !== "number" || !Number.isInteger(votes) || votes < 1 || votes > MAX_VOTES) {
     return { ok: false, error: `votes must be a whole number from 1 to ${MAX_VOTES}` };
   }
-  return { ok: true, value: { question: q, votes } };
+  if (!isRunId(body.runId)) return { ok: false, error: "runId must be 1-40 letters, digits or dashes" };
+  return { ok: true, value: { question: q, votes, runId: body.runId } };
 }
 
 function side(v: unknown, choices: string[]): v is DebatePair["persuader"] {
@@ -42,7 +51,7 @@ function side(v: unknown, choices: string[]): v is DebatePair["persuader"] {
 
 export function parseDebateBody(
   body: unknown
-): Result<{ question: string; choices: string[]; pairs: DebatePair[] }> {
+): Result<{ question: string; choices: string[]; pairs: DebatePair[]; mode: DebateMode; runId: string }> {
   if (!isRecord(body)) return { ok: false, error: "Expected a JSON object" };
   const q = question(body.question);
   if (!q) return { ok: false, error: `question must be 1-${MAX_QUESTION} characters` };
@@ -63,5 +72,11 @@ export function parseDebateBody(
       return { ok: false, error: "Each pair needs a persuader and persuadee with model, choice and reasoning" };
     }
   }
-  return { ok: true, value: { question: q, choices: choices as string[], pairs: pairs as DebatePair[] } };
+  const mode = body.mode ?? "persuade";
+  if (!MODES.includes(mode as DebateMode)) return { ok: false, error: `mode must be one of: ${MODES.join(", ")}` };
+  if (!isRunId(body.runId)) return { ok: false, error: "runId must be 1-40 letters, digits or dashes" };
+  return {
+    ok: true,
+    value: { question: q, choices: choices as string[], pairs: pairs as DebatePair[], mode: mode as DebateMode, runId: body.runId },
+  };
 }

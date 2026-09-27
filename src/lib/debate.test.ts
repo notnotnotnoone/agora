@@ -9,7 +9,9 @@ const vote = (slot: number, model: string, choice: string | null, status: Vote["
   text: "",
   choice,
   reasons: choice ? { [choice]: `because ${model}` } : {},
-  skipped: [],
+  requestId: null,
+  journey: null,
+  retries: [],
 });
 
 describe("buildPairs", () => {

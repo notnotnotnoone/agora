@@ -1,7 +1,7 @@
 // Every prompt Agora sends, and the parsers for what comes back. Pure, so
 // the formats are pinned down by tests.
 
-import type { ChatMessage } from "./types";
+import type { ChatMessage, DebateMode, Speaker } from "./types";
 
 export const MIN_CHOICES = 2;
 export const MAX_CHOICES = 6;
@@ -126,49 +126,64 @@ Do not give your own opinion on the dilemma.`,
 
 // ── debate ──────────────────────────────────────────────────────────────
 
-export function persuaderMessages(
-  question: string,
-  own: { choice: string; reasoning: string },
-  opponentChoice: string
-): ChatMessage[] {
+export interface TurnContext {
+  question: string;
+  choices: string[];
+  mode: DebateMode;
+  speaker: Speaker;
+  /** 0-based; the persuader speaks on even turns. */
+  turn: number;
+  maxTurns: number;
+  own: { original: string; current: string; reasoning: string };
+  opponent: { original: string; current: string };
+  history: { speaker: Speaker; text: string; vote: string }[];
+}
+
+/** One turn of a round-2 debate: the speaker argues, then says where it stands. */
+export function turnMessages(ctx: TurnContext): ChatMessage[] {
+  const { choices, mode, speaker, turn, maxTurns, own, opponent, history } = ctx;
+  const voteLine = `End with one line:\nVOTE: <one of: ${choices.join(", ")}>`;
+  let content: string;
+
+  if (turn === 0) {
+    const reasoning = own.reasoning ? ` Your reasoning was: ${own.reasoning}` : "";
+    const framing =
+      mode === "symmetric"
+        ? `You voted "${own.current}" on this dilemma. Another AI voted "${opponent.current}". Have a genuine back-and-forth about it: make your honest case, but stay open to theirs.`
+        : `You voted "${own.current}" on this dilemma. Another AI voted "${opponent.current}". Open with your strongest case: the concrete reason "${own.current}" is right here, and what is actually wrong with "${opponent.current}".`;
+    content = `${framing}${reasoning}\n\nUnder 150 words.\n\n${voteLine}`;
+  } else {
+    const stance =
+      own.current !== own.original
+        ? `You changed your vote to "${own.current}" earlier in this debate. Defend it with the conviction you brought before.`
+        : `You voted "${own.original}" and still hold that position.`;
+    const theirs =
+      opponent.current !== opponent.original
+        ? `Your opponent switched from "${opponent.original}" to "${opponent.current}".`
+        : `Your opponent has held "${opponent.current}" throughout.`;
+    const reasoning = turn === 1 && own.reasoning ? `\nYour original reasoning: ${own.reasoning}\n` : "";
+    const transcript = history
+      .map((h, i) => `[${i + 1}] ${h.speaker === speaker ? "You" : "Opponent"} (${h.vote}): ${h.text}`)
+      .join("\n\n");
+    const last = turn === maxTurns - 1 ? "\nThis is the final turn." : "";
+    const guidance =
+      mode === "symmetric"
+        ? "Continue the debate honestly. Engage with what they actually said, not the abstract position. Concede points you can't defend; push back on what you can."
+        : "Respond to what was just said. Don't restate your position: engage with their specific argument. If they landed a real point, say so. If you have genuinely changed your mind, say it clearly and defend your new position.";
+    content = `${stance} ${theirs}${reasoning}\n\nThe debate so far:\n${transcript}\n${last}\n\n${guidance} Under 150 words. Don't flip to be polite, and don't be stubborn either.\n\n${voteLine}`;
+  }
+
   return [
-    {
-      role: "system",
-      content: `You chose ${own.choice} on this moral dilemma${own.reasoning ? `, because: ${own.reasoning}` : "."}
-Your opponent chose ${opponentChoice}. Make your strongest case to change their mind.
-Be direct and concrete, under 150 words. Reply with the argument only.`,
-    },
-    { role: "user", content: question },
+    { role: "system", content },
+    { role: "user", content: ctx.question },
   ];
 }
 
-export function persuadeeMessages(
-  question: string,
-  own: { choice: string; reasoning: string },
-  opponentChoice: string,
-  argument: string,
-  choices: string[]
-): ChatMessage[] {
-  return [
-    {
-      role: "system",
-      content: `You chose ${own.choice} on this moral dilemma${own.reasoning ? `, because: ${own.reasoning}` : "."}
+const VOTE_LINE = /^[ \t*]*VOTE[ \t*]*:[ \t*]*(.+?)[ \t*]*$/gim;
 
-Your opponent argues for ${opponentChoice}:
-${argument}
-
-Respond honestly. Change your vote only if the argument is genuinely compelling:
-don't flip to be polite, and don't be stubborn either.
-Format your reply EXACTLY as:
-RESPONSE: <your reply, under 120 words>
-ANSWER: <one of: ${choices.join(", ")}>`,
-    },
-    { role: "user", content: question },
-  ];
-}
-
-export function parsePersuadee(text: string, choices: string[]): { response: string; choice: string | null } {
-  const response = text.match(/RESPONSE[ \t*]*:[\s*]*([\s\S]*?)(?=\n[ \t*]*ANSWER[ \t*]*:|$)/i)?.[1].trim();
-  const answers = [...text.matchAll(/^[ \t*]*ANSWER[ \t*]*:[ \t]*(.+?)[ \t]*$/gim)];
-  return { response: response || text.trim(), choice: matchChoice(answers.at(-1)?.[1], choices) };
+/** A turn's argument and the vote it ends on; the speaker's `current` vote if it names none. */
+export function parseTurn(text: string, current: string, choices: string[]): { text: string; vote: string } {
+  const votes = [...text.matchAll(VOTE_LINE)];
+  const vote = matchChoice(votes.at(-1)?.[1], choices) ?? current;
+  return { text: text.replace(VOTE_LINE, "").trim(), vote };
 }

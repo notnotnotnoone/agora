@@ -1,17 +1,26 @@
 import type { ArenaState } from "@/lib/arena";
+import type { RequestRow } from "@/lib/types";
 import { num, usd } from "@/lib/format";
 
-export function StatsStrip({ state, spentUsd }: { state: ArenaState; spentUsd: number | null }) {
+export function StatsStrip({
+  state,
+  requests,
+  spentUsd,
+}: {
+  state: ArenaState;
+  requests: RequestRow[];
+  spentUsd: number | null;
+}) {
   const done = state.votes.filter((v) => v.status === "done");
-  const providers = new Set(done.map((v) => v.model.split("/")[0]));
-  const failovers = state.votes.reduce((n, v) => n + v.skipped.length, 0);
-  const tokens = state.calls.reduce((n, c) => n + c.usage.in + c.usage.out, 0);
+  const providers = new Set(done.flatMap((v) => (v.model ? [v.model.split("/")[0]] : [])));
+  const failovers = requests.filter((r) => r.outcome === "failover").length;
+  const tokens = requests.reduce((n, r) => n + r.tokens_in + r.tokens_out, 0);
 
   const stats: { label: string; value: string; note: string; good?: boolean }[] = [
     { label: "Votes", value: `${done.length}`, note: state.requested ? `of ${state.requested} asked` : "none yet" },
     { label: "Providers", value: `${providers.size}`, note: "free tiers pooled" },
-    { label: "Failovers", value: `${failovers}`, note: "models skipped, votes kept" },
-    { label: "Requests", value: num(state.calls.length), note: "through flexrouter" },
+    { label: "Failovers", value: `${failovers}`, note: "requests saved by another model" },
+    { label: "Requests", value: num(requests.length), note: "in flexrouter's log" },
     { label: "Tokens", value: num(tokens), note: "in + out" },
     {
       label: "Spent",

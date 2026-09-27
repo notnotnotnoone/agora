@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useArena } from "@/hooks/useArena";
 import { useFlexrouter } from "@/hooks/useFlexrouter";
+import { useRequestLog } from "@/hooks/useRequestLog";
 import { Consensus } from "./Consensus";
 import { Debate } from "./Debate";
 import { DilemmaForm } from "./DilemmaForm";
@@ -21,6 +22,8 @@ export function Arena() {
   const { state, live, start, stop, startDebate, load } = useArena();
   const snapshot = useFlexrouter();
   const [historyOpen, setHistoryOpen] = useState(false);
+  const busy = live || (state.debate?.running ?? false);
+  const log = useRequestLog(state.runId, busy);
 
   const connected = snapshot?.connected ?? false;
   const available = snapshot?.connected ? snapshot.models.filter((m) => USABLE.has(m.state)).length : null;
@@ -54,7 +57,7 @@ export function Arena() {
         </div>
       </header>
 
-      <StatsStrip state={state} spentUsd={spent} />
+      <StatsStrip state={state} requests={log.rows} spentUsd={spent} />
 
       <div className="columns">
         <div className="stack">
@@ -72,16 +75,22 @@ export function Arena() {
           <Consensus state={state} />
           <VoteGrid state={state} />
           <Summary state={state} />
-          <Debate state={state} live={live || (state.debate?.running ?? false)} onStart={startDebate} />
+          <Debate state={state} live={busy} onStart={startDebate} />
         </div>
         <div className="stack aside">
           <RoutingPanel snapshot={snapshot} state={state} />
-          <ProviderMix state={state} spentUsd={spent} />
+          <ProviderMix state={state} requests={log.rows} spentUsd={spent} />
         </div>
       </div>
 
       <div style={{ marginTop: 16 }}>
-        <RequestLog calls={state.calls} dashboardUrl={dashboardUrl} />
+        <RequestLog
+          rows={log.rows}
+          phases={state.phases}
+          error={log.error}
+          live={busy}
+          dashboardUrl={dashboardUrl}
+        />
       </div>
 
       {historyOpen && <HistorySheet onLoad={load} onClose={() => setHistoryOpen(false)} />}

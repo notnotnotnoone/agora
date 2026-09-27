@@ -14,10 +14,10 @@ export function reasoningOf(vote: Pick<Vote, "choice" | "reasons">): string {
  * unanimous (or tied with nothing to argue).
  */
 export function buildPairs(votes: Vote[]): DebatePair[] {
-  const byChoice = new Map<string, Vote[]>();
+  const byChoice = new Map<string, (Vote & { model: string })[]>();
   for (const v of votes) {
-    if (v.status !== "done" || !v.choice) continue;
-    byChoice.set(v.choice, [...(byChoice.get(v.choice) ?? []), v]);
+    if (v.status !== "done" || !v.choice || !v.model) continue;
+    byChoice.set(v.choice, [...(byChoice.get(v.choice) ?? []), { ...v, model: v.model }]);
   }
   if (byChoice.size < 2) return [];
 

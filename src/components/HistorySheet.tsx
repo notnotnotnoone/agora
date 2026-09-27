@@ -32,7 +32,7 @@ export function HistorySheet({ onLoad, onClose }: { onLoad: (run: SavedRun) => v
         <ul className="runs">
           {runs.map((run) => {
             const counts = [...tally(run.votes, run.choices)].sort((a, b) => b[1] - a[1]);
-            const providers = new Set(run.votes.map((v) => v.model.split("/")[0])).size;
+            const providers = new Set(run.votes.flatMap((v) => (v.model ? [v.model.split("/")[0]] : []))).size;
             return (
               <li key={run.id}>
                 <button

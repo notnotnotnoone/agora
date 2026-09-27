@@ -1,7 +1,7 @@
 import "server-only";
 
 import { readEvents } from "../sse";
-import type { Attempt, CallRecord, ChatMessage, Model, ModelState, Phase, RosterModel, Usage } from "../types";
+import type { Attempt, ChatMessage, Journey, Model, ModelState, RequestOutcome, RequestPage, RosterModel, Usage } from "../types";
 
 // Agora talks to a local flexrouter server (`flexrouter serve`), which owns
 // provider keys, rate limits, key rotation and failover. Nothing here knows
@@ -17,6 +17,12 @@ export const BUCKET = process.env.FLEXROUTER_BUCKET ?? "auto";
 export const DASHBOARD_URL = (process.env.FLEXROUTER_DASHBOARD_URL ?? BASE_URL).replace(/\/+$/, "");
 
 const REQUEST_ID_HEADER = "x-flexrouter-request-id";
+// flexrouter's own request options (ADR 0018). Headers, so they never reach a provider.
+const CLIENT_HEADER = "X-Flexrouter-Client";
+const EXCLUDE_HEADER = "X-Flexrouter-Exclude";
+
+/** The tag a run's requests carry in flexrouter's log. */
+export const clientTag = (runId: string) => `agora-${runId}`;
 
 // Statuses that won't clear by themselves. Busy and struggling models stay in
 // the roster; they recover, and a vote that hits one simply moves on.
@@ -34,8 +40,8 @@ export class FlexrouterError extends Error {
   }
 }
 
-function headers(): Record<string, string> {
-  const h: Record<string, string> = { "Content-Type": "application/json" };
+function headers(extra: Record<string, string> = {}): Record<string, string> {
+  const h: Record<string, string> = { "Content-Type": "application/json", ...extra };
   if (TOKEN) h.Authorization = `Bearer ${TOKEN}`;
   return h;
 }
@@ -43,9 +49,9 @@ function headers(): Record<string, string> {
 const unreachable = () =>
   new FlexrouterError(`Can't reach flexrouter at ${BASE_URL}. Is \`flexrouter serve\` running?`);
 
-async function request(path: string, init: RequestInit = {}): Promise<Response> {
+async function request(path: string, init: RequestInit = {}, extra?: Record<string, string>): Promise<Response> {
   try {
-    return await fetch(`${BASE_URL}${path}`, { ...init, headers: headers(), cache: "no-store" });
+    return await fetch(`${BASE_URL}${path}`, { ...init, headers: headers(extra), cache: "no-store" });
   } catch (err) {
     if (init.signal?.aborted) throw err;
     throw unreachable();
@@ -111,14 +117,20 @@ export interface ChatRequest {
   model: string;
   messages: ChatMessage[];
   temperature?: number;
+  /** Tags the request in flexrouter's log, so Agora can find it again. */
+  client?: string;
+  /** "provider/model" ids a bucket call must leave out. */
+  exclude?: string[];
   signal?: AbortSignal;
+  /** Called once, as soon as flexrouter names the model answering. */
+  onModel?: (model: string) => void;
   onToken?: (token: string) => void;
 }
 
 export interface ChatResult {
   text: string;
   requestId: string | null;
-  /** The model that answered, when flexrouter says; for a pinned call, the pin. */
+  /** The model that answered, as flexrouter's stream named it; for a pinned call, the pin. */
   answeredBy: string | null;
   usage: Usage;
   ms: number;
@@ -162,13 +174,16 @@ const pinned = (model: string) => (model.includes("/") ? model : null);
  * any failure, including one reported inside an HTTP 200 stream, carrying the
  * attempts flexrouter made.
  */
-export const streamChat: ChatFn = async ({ model, messages, temperature, signal, onToken }) => {
+export const streamChat: ChatFn = async ({ model, messages, temperature, client, exclude, signal, onModel, onToken }) => {
   const started = Date.now();
-  const res = await request("/v1/chat/completions", {
-    method: "POST",
-    body: JSON.stringify({ model, messages, temperature, stream: true }),
-    signal,
-  });
+  const options: Record<string, string> = {};
+  if (client) options[CLIENT_HEADER] = client;
+  if (exclude?.length) options[EXCLUDE_HEADER] = exclude.join(",");
+  const res = await request(
+    "/v1/chat/completions",
+    { method: "POST", body: JSON.stringify({ model, messages, temperature, stream: true }), signal },
+    options
+  );
   const requestId = res.headers.get(REQUEST_ID_HEADER);
 
   if (!res.ok || !res.body) {
@@ -178,10 +193,11 @@ export const streamChat: ChatFn = async ({ model, messages, temperature, signal,
 
   let text = "";
   let usage: Usage = { in: 0, out: 0 };
-  let answeredBy: string | null = null;
+  let answeredBy = pinned(model);
+  if (answeredBy) onModel?.(answeredBy);
   for await (const data of readEvents(res.body)) {
     let chunk: ErrorBody & {
-      model?: string;
+      flexrouter?: { model?: string };
       choices?: { delta?: { content?: string } }[];
       usage?: { prompt_tokens?: number; completion_tokens?: number };
     };
@@ -192,7 +208,10 @@ export const streamChat: ChatFn = async ({ model, messages, temperature, signal,
     }
     if (chunk.error) throw toError(chunk, "flexrouter stream failed", requestId, Date.now() - started);
     if (chunk.usage) usage = { in: chunk.usage.prompt_tokens ?? 0, out: chunk.usage.completion_tokens ?? 0 };
-    answeredBy ??= chunk.model && chunk.model !== model ? chunk.model : null;
+    if (!answeredBy && chunk.flexrouter?.model) {
+      answeredBy = chunk.flexrouter.model;
+      onModel?.(answeredBy);
+    }
     const token = chunk.choices?.[0]?.delta?.content;
     if (token) {
       text += token;
@@ -200,30 +219,33 @@ export const streamChat: ChatFn = async ({ model, messages, temperature, signal,
     }
   }
 
-  return { text, requestId, answeredBy: pinned(model) ?? answeredBy, usage, ms: Date.now() - started };
+  return { text, requestId, answeredBy, usage, ms: Date.now() - started };
 };
 
-/** The request-log row for a finished call. */
-export function callRecord(phase: Phase, asked: string, outcome: ChatResult | FlexrouterError): CallRecord {
-  const at = Date.now() - outcome.ms;
-  const id = outcome.requestId ?? `local_${at.toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-  if (outcome instanceof FlexrouterError) {
-    return {
-      id, at, phase, asked,
-      answeredBy: null,
-      outcome: "failed",
-      attempts: outcome.attempts,
-      usage: { in: 0, out: 0 },
-      ms: outcome.ms,
-      error: outcome.message,
-    };
-  }
-  return {
-    id, at, phase, asked,
-    answeredBy: outcome.answeredBy,
-    outcome: "ok",
-    attempts: [],
-    usage: outcome.usage,
-    ms: outcome.ms,
-  };
+// ── flexrouter's request log ────────────────────────────────────────────
+
+export interface RequestQuery {
+  client: string;
+  result?: RequestOutcome | "";
+  q?: string;
+  limit?: number;
+}
+
+/** Requests flexrouter logged under one client tag, newest first. */
+export async function listRequests({ client, result, q, limit }: RequestQuery): Promise<RequestPage> {
+  const params = new URLSearchParams({ client });
+  if (result) params.set("result", result);
+  if (q?.trim()) params.set("q", q.trim());
+  if (limit) params.set("limit", String(limit));
+  const res = await request(`/api/requests?${params}`);
+  if (!res.ok) throw new FlexrouterError(`flexrouter /api/requests answered ${res.status}`);
+  return (await res.json()) as RequestPage;
+}
+
+/** One request's journey, or null if flexrouter has no record of it. */
+export async function getJourney(id: string, signal?: AbortSignal): Promise<Journey | null> {
+  const res = await request(`/api/requests/${encodeURIComponent(id)}`, { signal });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new FlexrouterError(`flexrouter /api/requests/${id} answered ${res.status}`);
+  return (await res.json()) as Journey;
 }

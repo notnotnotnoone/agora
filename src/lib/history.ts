@@ -1,4 +1,5 @@
-import type { CallRecord, DebatePair, Model, Vote } from "./types";
+import type { DebateState } from "./arena";
+import type { Model, Phase, Vote } from "./types";
 
 // Finished runs, kept in this browser's IndexedDB.
 
@@ -10,8 +11,9 @@ export interface SavedRun {
   models: Model[];
   votes: Vote[];
   summary: { model: string | null; text: string };
-  calls: CallRecord[];
-  debate?: { pairs: DebatePair[]; verdicts: ({ finalChoice: string; flipped: boolean } | null)[] };
+  /** Request id → what it was for. The requests themselves are read back from flexrouter. */
+  phases?: Record<string, Phase>;
+  debate?: Pick<DebateState, "mode" | "pairs" | "exchanges">;
 }
 
 const DB_NAME = "agora";
@@ -40,10 +42,15 @@ function done<T>(req: IDBRequest<T>): Promise<T> {
   });
 }
 
+// Runs saved by earlier builds of this branch have another shape; skip them
+// rather than render them wrong.
+const isCurrent = (run: SavedRun) =>
+  run.votes.every((v) => Array.isArray(v.retries)) && (!run.debate || Array.isArray(run.debate.exchanges));
+
 export async function listRuns(): Promise<SavedRun[]> {
   const db = await open();
   const runs = await done(db.transaction(STORE).objectStore(STORE).getAll() as IDBRequest<SavedRun[]>);
-  return runs.sort((a, b) => b.at - a.at);
+  return runs.filter(isCurrent).sort((a, b) => b.at - a.at);
 }
 
 /** Saves (or replaces) a run, keeping only the newest LIMIT. */

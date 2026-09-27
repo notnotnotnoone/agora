@@ -5,7 +5,7 @@ import { arenaReducer, initialState, isLive, toSavedRun } from "@/lib/arena";
 import { buildPairs } from "@/lib/debate";
 import { saveRun, type SavedRun } from "@/lib/history";
 import { readJsonEvents } from "@/lib/sse";
-import type { DebateEvent, RunEvent } from "@/lib/types";
+import type { DebateEvent, DebateMode, RunEvent } from "@/lib/types";
 
 async function postStream<E>(url: string, body: unknown, signal: AbortSignal, onEvent: (event: E) => void) {
   const res = await fetch(url, {
@@ -43,9 +43,10 @@ export function useArena() {
       cancel();
       const ctrl = new AbortController();
       abortRef.current = ctrl;
-      dispatch({ type: "start", runId: newRunId(), at: Date.now(), question, votes });
+      const runId = newRunId();
+      dispatch({ type: "start", runId, at: Date.now(), question, votes });
       try {
-        await postStream<RunEvent>("/api/run", { question, votes }, ctrl.signal, (event) =>
+        await postStream<RunEvent>("/api/run", { question, votes, runId }, ctrl.signal, (event) =>
           dispatch({ type: "run", event })
         );
       } catch (err) {
@@ -61,24 +62,27 @@ export function useArena() {
     dispatch({ type: "debate_stop" });
   }, [cancel]);
 
-  const startDebate = useCallback(async () => {
+  const startDebate = useCallback(
+    async (mode: DebateMode) => {
     const pairs = buildPairs(state.votes);
-    if (pairs.length === 0) return;
+    if (pairs.length === 0 || !state.runId) return;
     cancel();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
-    dispatch({ type: "debate_start", pairs });
+    dispatch({ type: "debate_start", pairs, mode });
     try {
       await postStream<DebateEvent>(
         "/api/debate",
-        { question: state.question, choices: state.choices, pairs },
+        { question: state.question, choices: state.choices, pairs, mode, runId: state.runId },
         ctrl.signal,
         (event) => dispatch({ type: "debate", event })
       );
     } catch (err) {
       if (!isAbort(err)) dispatch({ type: "debate_fail", message: err instanceof Error ? err.message : String(err) });
     }
-  }, [cancel, state.votes, state.question, state.choices]);
+    },
+    [cancel, state.votes, state.question, state.choices, state.runId]
+  );
 
   const load = useCallback(
     (run: SavedRun) => {

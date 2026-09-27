@@ -40,53 +40,112 @@ export interface Attempt {
   ms: number | null;
 }
 
-export type Phase = "extract" | "vote" | "summary" | "debate";
-export type Outcome = "ok" | "failed";
+// ── flexrouter's request log (GET /api/requests, ADR 0018) ──────────────
 
-/** One request Agora sent through flexrouter: a row in the request log. */
-export interface CallRecord {
+export type RequestOutcome = "ok" | "failover" | "failed";
+
+/** One row of flexrouter's request log. */
+export interface RequestRow {
   id: string;
-  at: number;
-  phase: Phase;
-  /** What Agora asked for: a pinned "provider/model" or a bucket name. */
-  asked: string;
-  answeredBy: string | null;
-  outcome: Outcome;
-  attempts: Attempt[];
-  usage: Usage;
-  ms: number;
-  error?: string;
+  /** ISO time; flexrouter writes it as "...+00:00Z", see parseAt(). */
+  at: string;
+  bucket: string;
+  ok: boolean;
+  answered_by: { provider: string; model: string } | null;
+  tokens_in: number;
+  tokens_out: number;
+  ms_total: number;
+  skipped_count: number;
+  outcome: RequestOutcome;
+  attempt_count: number;
+  client: string | null;
 }
 
-export interface Skip {
-  model: string;
+export interface RequestPage {
+  requests: RequestRow[];
+  total: number;
+}
+
+/** One step of a request's journey, in the order flexrouter took it. */
+export type JourneyStep =
+  | { kind: "skipped"; provider: string; model: string; reason: string; detail: string }
+  | {
+      kind: "failed";
+      provider: string;
+      model: string;
+      status: number | null;
+      message: string;
+      verdict: string;
+      ms: number | null;
+    }
+  | { kind: "answered"; provider: string; model: string; ms: number | null }
+  | { kind: "gave_up" };
+
+/** GET /api/requests/{id}: what flexrouter passed over, tried and got back. */
+export interface Journey {
+  id: string;
+  at: string;
+  bucket: string;
+  client: string | null;
+  ok: boolean;
+  outcome: RequestOutcome;
+  tokens_in: number;
+  tokens_out: number;
+  ms_total: number;
+  steps: JourneyStep[];
+}
+
+/** What Agora was doing when it sent a request; flexrouter doesn't know. */
+export type Phase = "extract" | "vote" | "summary" | "debate";
+
+/** A request made for a vote that didn't end in a vote. */
+export interface Retry {
+  requestId: string | null;
+  /** The model that answered, when there was one. */
+  model: string | null;
   reason: string;
+  journey: Journey | null;
 }
 
 export interface Vote {
   slot: number;
-  model: string;
+  /** The model answering; null until flexrouter names it. */
+  model: string | null;
   status: "streaming" | "done" | "failed";
   text: string;
   choice: string | null;
   reasons: Record<string, string>;
-  /** Models this vote moved past before `model` answered. */
-  skipped: Skip[];
+  requestId: string | null;
+  /** The journey of the request that produced this vote, once it's finished. */
+  journey: Journey | null;
+  /** Earlier requests for this vote that didn't produce one. */
+  retries: Retry[];
   ms?: number;
   usage?: Usage;
+  error?: string;
 }
 
 export type RunEvent =
   | { type: "models"; models: Model[] }
+  | { type: "request"; id: string; phase: Phase }
   | { type: "choices"; choices: string[] }
-  | { type: "vote_start"; slot: number; model: string }
+  | { type: "vote_start"; slot: number }
+  | { type: "vote_model"; slot: number; model: string }
   | { type: "vote_token"; slot: number; token: string }
-  | { type: "vote_skip"; slot: number; model: string; reason: string }
-  | { type: "vote_done"; slot: number; choice: string; reasons: Record<string, string>; ms: number; usage: Usage }
-  | { type: "vote_failed"; slot: number; reason: string }
-  | { type: "summary_start"; model: string }
+  | { type: "vote_retry"; slot: number; retry: Retry }
+  | {
+      type: "vote_done";
+      slot: number;
+      choice: string;
+      reasons: Record<string, string>;
+      ms: number;
+      usage: Usage;
+      requestId: string | null;
+      journey: Journey | null;
+    }
+  | { type: "vote_failed"; slot: number; reason: string; requestId: string | null; journey: Journey | null }
+  | { type: "summary_start"; model: string | null }
   | { type: "summary_token"; token: string }
-  | { type: "call"; call: CallRecord }
   | { type: "error"; message: string }
   | { type: "done" };
 
@@ -95,14 +154,26 @@ export interface DebatePair {
   persuadee: { model: string; choice: string; reasoning: string };
 }
 
-export type Turn = "persuader" | "persuadee";
+export type Speaker = "persuader" | "persuadee";
+
+/**
+ * "persuade": the majority voter sets out to change the minority voter's mind.
+ * "symmetric": both argue their side and stay open to the other's.
+ */
+export type DebateMode = "persuade" | "symmetric";
 
 export type DebateEvent =
   | { type: "pair_start"; pair: number }
-  | { type: "turn_token"; pair: number; turn: Turn; token: string }
-  | { type: "turn_done"; pair: number; turn: Turn; text: string }
-  | { type: "verdict"; pair: number; finalChoice: string; flipped: boolean }
-  | { type: "call"; call: CallRecord }
+  | { type: "turn_start"; pair: number; turn: number; speaker: Speaker }
+  | { type: "turn_token"; pair: number; turn: number; token: string }
+  | { type: "turn_done"; pair: number; turn: number; text: string; vote: string; requestId: string | null }
+  | { type: "request"; id: string; phase: Phase }
+  | {
+      type: "verdict";
+      pair: number;
+      persuader: { finalChoice: string; flipped: boolean };
+      persuadee: { finalChoice: string; flipped: boolean };
+    }
   | { type: "error"; message: string }
   | { type: "done" };
 

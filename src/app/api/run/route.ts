@@ -1,4 +1,4 @@
-import { BUCKET, listModels, streamChat } from "@/lib/server/flexrouter";
+import { BUCKET, getJourney, listModels, streamChat } from "@/lib/server/flexrouter";
 import { runRound } from "@/lib/server/run";
 import { badRequest, eventStream } from "@/lib/server/stream";
 import { parseRunBody } from "@/lib/server/validate";
@@ -13,6 +13,13 @@ export async function POST(request: Request) {
     if (models.length === 0) {
       throw new Error("flexrouter has no usable models. Add some to its config.yaml, or check `flexrouter doctor`.");
     }
-    await runRound(parsed.value, { chat: streamChat, models, bucket: BUCKET, emit, signal });
+    await runRound(parsed.value, {
+      chat: streamChat,
+      journey: (id) => getJourney(id, signal),
+      models,
+      bucket: BUCKET,
+      emit,
+      signal,
+    });
   });
 }

@@ -369,6 +369,7 @@ input[type="number"] { width: 72px; font-family: var(--mono); }
 .chain .skip { color: var(--bad); text-decoration: line-through; text-decoration-color: rgba(248, 113, 113, .5); }
 .chain .arrow { color: var(--ink-4); }
 .chain .hit { color: var(--green); }
+.chain .rejected { color: var(--warn); }
 
 .cursor::after {
   content: "▍";
@@ -382,9 +383,32 @@ input[type="number"] { width: 72px; font-family: var(--mono); }
 
 .debate { display: flex; flex-direction: column; gap: 1px; background: var(--rule); }
 .exchange { background: var(--panel); padding: 14px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-.exchange-side { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.exchange-side p { margin: 0; font-size: 12px; color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
-.exchange-foot { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--rule); padding-top: 10px; }
+.exchange-foot { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; gap: 10px; border-top: 1px solid var(--rule); padding-top: 10px; }
+.turn-wait { grid-column: 1 / -1; margin: 0; }
+
+/* a debate's turns, alternating sides like a chat */
+.turns { grid-column: 1 / -1; list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.turn { max-width: 85%; display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--rule); background: var(--raise); }
+.turn-persuadee { align-self: flex-end; }
+.turn-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.turn p { margin: 0; font-size: 12px; color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 700px) { .turn { max-width: 100%; } }
+
+/* segmented choice, e.g. the debate mode */
+.seg { display: inline-flex; border: 1px solid var(--rule-2); border-radius: 2px; }
+.seg button {
+  font: 500 11px/1 var(--mono);
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--ink-3);
+  background: none;
+  border: 0;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+.seg button + button { border-left: 1px solid var(--rule-2); }
+.seg button.on { color: var(--green); background: var(--green-wash); }
+.seg button:focus-visible { outline: 1px solid var(--green); outline-offset: -1px; }
 @media (max-width: 700px) { .exchange { grid-template-columns: 1fr; } }
 
 /* ── routing panel ─────────────────────────────────────── */
@@ -480,6 +504,7 @@ table.log td { padding: 8px 12px; }
   border: 1px solid;
 }
 .outcome-ok { color: var(--green); border-color: rgba(52, 211, 153, .35); background: var(--green-wash); }
+.outcome-failover { color: var(--blue); border-color: rgba(125, 211, 252, .35); background: var(--blue-wash); }
 .outcome-failed { color: var(--bad); border-color: rgba(248, 113, 113, .35); background: var(--bad-wash); }
 
 /* ── sheet (side panel) ────────────────────────────────── */
@@ -589,6 +614,9 @@ table.log td { padding: 8px 12px; }
 .jstep-kind { font: 500 10px var(--mono); letter-spacing: .1em; }
 .jstep-failed .jstep-kind, .jstep-gave_up .jstep-kind { color: var(--bad); }
 .jstep-answered .jstep-kind { color: var(--green); }
+.jstep-skipped .jstep-kind { color: var(--ink-3); }
+.jstep details summary { cursor: pointer; font: 500 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
+.jstep details p { margin: 6px 0 0; font-size: 11px; overflow-wrap: anywhere; }
 .jstep-where { font: 500 13px var(--mono); overflow-wrap: anywhere; }
 .jstep-detail { color: var(--ink-2); font-size: 12px; }
 .jstep-msg {

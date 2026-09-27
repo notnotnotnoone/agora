@@ -1,24 +1,33 @@
-import type { ArenaState } from "@/lib/arena";
+import { voteChain, type ArenaState } from "@/lib/arena";
 import { ms, modelName, num, providerOf } from "@/lib/format";
 import type { Vote } from "@/lib/types";
 import { Box, ChoiceTag, Tag } from "./ui";
 
-/** Which models this vote passed over before one answered, e.g. ✕ a → ✕ b → ● c. */
+/**
+ * What this vote went through before it counted, from flexrouter's journeys:
+ * ✕ models that failed, ⊘ answers that didn't count, ● the model that voted.
+ * Nothing is shown for a vote that went straight through.
+ */
 function Chain({ vote }: { vote: Vote }) {
-  if (vote.skipped.length === 0) return null;
+  const chain = voteChain(vote);
+  if (!chain.some((l) => l.kind !== "answered")) return null;
   return (
     <div className="chain" aria-label="Failover">
-      {vote.skipped.map((s, i) => (
+      {chain.map((l, i) => (
         <span key={i}>
-          <span className="skip" title={s.reason}>
-            ✕ {modelName(s.model)}
-          </span>
-          <span className="arrow"> →</span>
+          {l.kind === "answered" ? (
+            <span className="hit">● {modelName(l.model)}</span>
+          ) : (
+            <>
+              <span className={l.kind === "failed" ? "skip" : "rejected"} title={l.note}>
+                {l.kind === "failed" ? "✕" : "⊘"} {modelName(l.model)}
+              </span>
+              <span className="arrow"> →</span>
+            </>
+          )}
         </span>
       ))}
-      <span className={vote.status === "failed" ? "skip" : "hit"}>
-        {vote.status === "failed" ? "nothing left" : `● ${modelName(vote.model)}`}
-      </span>
+      {vote.status === "failed" && <span className="skip">no vote</span>}
     </div>
   );
 }
@@ -30,16 +39,17 @@ function VoteCard({ vote, choices }: { vote: Vote; choices: string[] }) {
   return (
     <article className={`vote ${vote.status}`}>
       <div className="vote-head">
-        {!(vote.status === "failed" && vote.skipped.length) && <Tag>{providerOf(vote.model)}</Tag>}
-        <span className="vote-model" title={vote.model}>
-          {vote.status === "failed" && vote.skipped.length ? "no model left" : modelName(vote.model)}
+        {vote.model && <Tag>{providerOf(vote.model)}</Tag>}
+        <span className="vote-model" title={vote.model ?? undefined}>
+          {vote.model ? modelName(vote.model) : vote.status === "failed" ? "no model" : "routing…"}
         </span>
         {vote.status === "done" && vote.choice && <ChoiceTag choices={choices} choice={vote.choice} />}
-        {vote.status === "streaming" && <Tag tone="blue">deciding</Tag>}
+        {vote.status === "streaming" && <Tag tone="blue">{vote.model ? "deciding" : "asking flexrouter"}</Tag>}
         {vote.status === "failed" && <Tag tone="bad">no vote</Tag>}
       </div>
       <Chain vote={vote} />
-      {vote.status === "streaming" && <p className="vote-text cursor">{tail}</p>}
+      {vote.status === "streaming" && vote.model && <p className="vote-text cursor">{tail}</p>}
+      {vote.status === "failed" && vote.error && <p className="vote-text dim">{vote.error}</p>}
       {vote.status === "done" && reason && <p className="vote-text">{reason}</p>}
       {vote.status === "done" && (
         <>
@@ -67,7 +77,7 @@ function VoteCard({ vote, choices }: { vote: Vote; choices: string[] }) {
 export function VoteGrid({ state }: { state: ArenaState }) {
   if (state.votes.length === 0) return null;
   return (
-    <Box title="Votes" sub="each from a different model" flush>
+    <Box title="Votes" sub="each from a different model, picked by flexrouter" flush>
       <div className="vote-grid">
         {state.votes.map((v) => (
           <VoteCard key={v.slot} vote={v} choices={state.choices} />

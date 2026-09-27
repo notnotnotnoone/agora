@@ -1,21 +1,43 @@
 import type { SavedRun } from "./history";
-import type { CallRecord, DebateEvent, DebatePair, Model, RunEvent, Vote } from "./types";
+import type {
+  DebateEvent,
+  DebateMode,
+  DebatePair,
+  Journey,
+  Model,
+  Phase as RequestPhase,
+  RequestRow,
+  RunEvent,
+  Speaker,
+  Vote,
+} from "./types";
 
 // All of a run's state, driven by the server's events. Pure, so the whole
 // flow is testable without a browser.
 
 export type Phase = "idle" | "extracting" | "voting" | "summarizing" | "done" | "stopped" | "error";
 
+export interface DebateTurn {
+  speaker: Speaker;
+  text: string;
+  /** Where the speaker stood at the end of the turn; null while it's speaking. */
+  vote: string | null;
+  done: boolean;
+}
+
+export interface Verdict {
+  persuader: { finalChoice: string; flipped: boolean };
+  persuadee: { finalChoice: string; flipped: boolean };
+}
+
 export interface Exchange {
   started: boolean;
-  persuader: string;
-  persuaderDone: boolean;
-  persuadee: string;
-  persuadeeDone: boolean;
-  verdict: { finalChoice: string; flipped: boolean } | null;
+  turns: DebateTurn[];
+  verdict: Verdict | null;
 }
 
 export interface DebateState {
+  mode: DebateMode;
   pairs: DebatePair[];
   exchanges: Exchange[];
   running: boolean;
@@ -34,8 +56,8 @@ export interface ArenaState {
   choices: string[];
   votes: Vote[];
   summary: { model: string | null; text: string };
-  /** Every flexrouter request this run made, newest first. */
-  calls: CallRecord[];
+  /** What each of this run's flexrouter requests was for, by request id. */
+  phases: Record<string, RequestPhase>;
   error: string | null;
   debate: DebateState | null;
 }
@@ -45,7 +67,7 @@ export type Action =
   | { type: "run"; event: RunEvent }
   | { type: "stop" }
   | { type: "fail"; message: string }
-  | { type: "debate_start"; pairs: DebatePair[] }
+  | { type: "debate_start"; pairs: DebatePair[]; mode: DebateMode }
   | { type: "debate"; event: DebateEvent }
   | { type: "debate_stop" }
   | { type: "debate_fail"; message: string }
@@ -62,7 +84,7 @@ export const initialState: ArenaState = {
   choices: [],
   votes: [],
   summary: { model: null, text: "" },
-  calls: [],
+  phases: {},
   error: null,
   debate: null,
 };
@@ -77,39 +99,44 @@ function updateExchange(debate: DebateState, pair: number, change: (e: Exchange)
   return { ...debate, exchanges: debate.exchanges.map((e, i) => (i === pair ? change(e) : e)) };
 }
 
+function updateTurn(e: Exchange, turn: number, change: (t: DebateTurn) => DebateTurn): Exchange {
+  return { ...e, turns: e.turns.map((t, i) => (i === turn ? change(t) : t)) };
+}
+
+const newVote = (slot: number): Vote => ({
+  slot,
+  model: null,
+  status: "streaming",
+  text: "",
+  choice: null,
+  reasons: {},
+  requestId: null,
+  journey: null,
+  retries: [],
+});
+
 function runEvent(state: ArenaState, event: RunEvent): ArenaState {
   switch (event.type) {
     case "models":
       return { ...state, models: event.models };
+    case "request":
+      return { ...state, phases: { ...state.phases, [event.id]: event.phase } };
     case "choices":
       return { ...state, choices: event.choices, phase: "voting" };
-    case "vote_start": {
-      const existing = state.votes.find((v) => v.slot === event.slot);
-      if (existing) {
-        return {
-          ...state,
-          votes: updateVote(state.votes, event.slot, (v) => ({ ...v, model: event.model, status: "streaming", text: "" })),
-        };
-      }
-      const vote: Vote = {
-        slot: event.slot,
-        model: event.model,
-        status: "streaming",
-        text: "",
-        choice: null,
-        reasons: {},
-        skipped: [],
-      };
-      return { ...state, votes: [...state.votes, vote].sort((a, b) => a.slot - b.slot) };
-    }
+    case "vote_start":
+      return { ...state, votes: [...state.votes, newVote(event.slot)].sort((a, b) => a.slot - b.slot) };
+    case "vote_model":
+      return { ...state, votes: updateVote(state.votes, event.slot, (v) => ({ ...v, model: event.model })) };
     case "vote_token":
       return { ...state, votes: updateVote(state.votes, event.slot, (v) => ({ ...v, text: v.text + event.token })) };
-    case "vote_skip":
+    case "vote_retry":
       return {
         ...state,
         votes: updateVote(state.votes, event.slot, (v) => ({
           ...v,
-          skipped: [...v.skipped, { model: event.model, reason: event.reason }],
+          model: null,
+          text: "",
+          retries: [...v.retries, event.retry],
         })),
       };
     case "vote_done":
@@ -122,16 +149,26 @@ function runEvent(state: ArenaState, event: RunEvent): ArenaState {
           reasons: event.reasons,
           ms: event.ms,
           usage: event.usage,
+          requestId: event.requestId,
+          journey: event.journey,
         })),
       };
     case "vote_failed":
-      return { ...state, votes: updateVote(state.votes, event.slot, (v) => ({ ...v, status: "failed", text: "" })) };
+      return {
+        ...state,
+        votes: updateVote(state.votes, event.slot, (v) => ({
+          ...v,
+          status: "failed",
+          text: "",
+          error: event.reason,
+          requestId: event.requestId,
+          journey: event.journey,
+        })),
+      };
     case "summary_start":
       return { ...state, phase: "summarizing", summary: { model: event.model, text: "" } };
     case "summary_token":
       return { ...state, summary: { ...state.summary, text: state.summary.text + event.token } };
-    case "call":
-      return { ...state, calls: [event.call, ...state.calls] };
     case "error":
       return { ...state, phase: "error", error: event.message };
     case "done":
@@ -142,29 +179,28 @@ function runEvent(state: ArenaState, event: RunEvent): ArenaState {
 function debateEvent(state: ArenaState, event: DebateEvent): ArenaState {
   const debate = state.debate;
   if (!debate) return state;
+  const exchange = (pair: number, change: (e: Exchange) => Exchange) => ({
+    ...state,
+    debate: updateExchange(debate, pair, change),
+  });
   switch (event.type) {
     case "pair_start":
-      return { ...state, debate: updateExchange(debate, event.pair, (e) => ({ ...e, started: true })) };
+      return exchange(event.pair, (e) => ({ ...e, started: true }));
+    case "turn_start":
+      return exchange(event.pair, (e) => ({
+        ...e,
+        turns: [...e.turns, { speaker: event.speaker, text: "", vote: null, done: false }],
+      }));
     case "turn_token":
-      return {
-        ...state,
-        debate: updateExchange(debate, event.pair, (e) => ({ ...e, [event.turn]: e[event.turn] + event.token })),
-      };
+      return exchange(event.pair, (e) => updateTurn(e, event.turn, (t) => ({ ...t, text: t.text + event.token })));
     case "turn_done":
-      return {
-        ...state,
-        debate: updateExchange(debate, event.pair, (e) => ({ ...e, [event.turn]: event.text, [`${event.turn}Done`]: true })),
-      };
+      return exchange(event.pair, (e) =>
+        updateTurn(e, event.turn, (t) => ({ ...t, text: event.text, vote: event.vote, done: true }))
+      );
     case "verdict":
-      return {
-        ...state,
-        debate: updateExchange(debate, event.pair, (e) => ({
-          ...e,
-          verdict: { finalChoice: event.finalChoice, flipped: event.flipped },
-        })),
-      };
-    case "call":
-      return { ...state, calls: [event.call, ...state.calls] };
+      return exchange(event.pair, (e) => ({ ...e, verdict: { persuader: event.persuader, persuadee: event.persuadee } }));
+    case "request":
+      return { ...state, phases: { ...state.phases, [event.id]: event.phase } };
     case "error":
       return { ...state, debate: { ...debate, running: false, error: event.message } };
     case "done":
@@ -172,14 +208,7 @@ function debateEvent(state: ArenaState, event: DebateEvent): ArenaState {
   }
 }
 
-const emptyExchange = (): Exchange => ({
-  started: false,
-  persuader: "",
-  persuaderDone: false,
-  persuadee: "",
-  persuadeeDone: false,
-  verdict: null,
-});
+const emptyExchange = (): Exchange => ({ started: false, turns: [], verdict: null });
 
 export function arenaReducer(state: ArenaState, action: Action): ArenaState {
   switch (action.type) {
@@ -207,7 +236,13 @@ export function arenaReducer(state: ArenaState, action: Action): ArenaState {
     case "debate_start":
       return {
         ...state,
-        debate: { pairs: action.pairs, exchanges: action.pairs.map(emptyExchange), running: true, error: null },
+        debate: {
+          mode: action.mode,
+          pairs: action.pairs,
+          exchanges: action.pairs.map(emptyExchange),
+          running: true,
+          error: null,
+        },
       };
     case "debate":
       return debateEvent(state, action.event);
@@ -229,15 +264,8 @@ export function arenaReducer(state: ArenaState, action: Action): ArenaState {
         choices: run.choices,
         votes: run.votes,
         summary: run.summary,
-        calls: run.calls,
-        debate: run.debate
-          ? {
-              pairs: run.debate.pairs,
-              exchanges: run.debate.verdicts.map((verdict) => ({ ...emptyExchange(), started: true, verdict })),
-              running: false,
-              error: null,
-            }
-          : null,
+        phases: run.phases ?? {},
+        debate: run.debate ? { ...run.debate, running: false, error: null } : null,
       };
     }
   }
@@ -254,9 +282,9 @@ export function toSavedRun(state: ArenaState): SavedRun | null {
     models: state.models,
     votes: state.votes.filter((v) => v.status === "done"),
     summary: state.summary,
-    calls: state.calls,
+    phases: state.phases,
     debate: state.debate
-      ? { pairs: state.debate.pairs, verdicts: state.debate.exchanges.map((e) => e.verdict) }
+      ? { mode: state.debate.mode, pairs: state.debate.pairs, exchanges: state.debate.exchanges }
       : undefined,
   };
 }
@@ -272,24 +300,54 @@ export function tally(votes: Vote[], choices: string[]): Map<string, number> {
 export interface ProviderShare {
   provider: string;
   votes: number;
-  calls: number;
+  requests: number;
   tokens: number;
 }
 
-/** Per provider: votes it cast, requests it answered, tokens it served. */
-export function providerShares(votes: Vote[], calls: CallRecord[]): ProviderShare[] {
+/** Per provider: votes it cast, and the requests and tokens flexrouter logged it answering. */
+export function providerShares(votes: Vote[], requests: RequestRow[]): ProviderShare[] {
   const shares = new Map<string, ProviderShare>();
   const share = (provider: string) => {
     let s = shares.get(provider);
-    if (!s) shares.set(provider, (s = { provider, votes: 0, calls: 0, tokens: 0 }));
+    if (!s) shares.set(provider, (s = { provider, votes: 0, requests: 0, tokens: 0 }));
     return s;
   };
-  for (const v of votes) if (v.status === "done") share(v.model.split("/")[0]).votes++;
-  for (const c of calls) {
-    if (!c.answeredBy) continue;
-    const s = share(c.answeredBy.split("/")[0]);
-    s.calls++;
-    s.tokens += c.usage.in + c.usage.out;
+  for (const v of votes) if (v.status === "done" && v.model) share(v.model.split("/")[0]).votes++;
+  for (const r of requests) {
+    if (!r.answered_by) continue;
+    const s = share(r.answered_by.provider);
+    s.requests++;
+    s.tokens += r.tokens_in + r.tokens_out;
   }
   return [...shares.values()].sort((a, b) => b.votes - a.votes || b.tokens - a.tokens);
+}
+
+/** A step in a vote's failover chain: ✕ failed, ⊘ answered but didn't count, ● voted. */
+export interface ChainLink {
+  model: string;
+  kind: "failed" | "rejected" | "answered";
+  note: string;
+}
+
+const failures = (journey: Journey | null): ChainLink[] =>
+  (journey?.steps ?? []).flatMap((s) =>
+    s.kind === "failed"
+      ? [{ model: `${s.provider}/${s.model}`, kind: "failed" as const, note: s.message || (s.status ? `HTTP ${s.status}` : "failed") }]
+      : []
+  );
+
+/**
+ * Everything a vote went through, from flexrouter's journeys: models that
+ * failed inside each request, answers that didn't count, and the model that
+ * voted. Models left out because they had already voted aren't listed.
+ */
+export function voteChain(vote: Vote): ChainLink[] {
+  const chain: ChainLink[] = [];
+  for (const r of vote.retries) {
+    chain.push(...failures(r.journey));
+    if (r.model) chain.push({ model: r.model, kind: "rejected", note: r.reason });
+  }
+  chain.push(...failures(vote.journey));
+  if (vote.status === "done" && vote.model) chain.push({ model: vote.model, kind: "answered", note: "" });
+  return chain;
 }

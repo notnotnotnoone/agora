@@ -1,13 +1,16 @@
-import { parsePersuadee, persuadeeMessages, persuaderMessages } from "../prompts";
-import type { DebateEvent, DebatePair } from "../types";
-import { callRecord, FlexrouterError, type ChatFn } from "./flexrouter";
+import { parseTurn, turnMessages } from "../prompts";
+import type { DebateEvent, DebateMode, DebatePair, Speaker } from "../types";
+import { clientTag, FlexrouterError, type ChatFn } from "./flexrouter";
 
 const CONCURRENCY = 4;
+export const MAX_TURNS = 5;
 
 export interface DebateInput {
   question: string;
   choices: string[];
   pairs: DebatePair[];
+  mode: DebateMode;
+  runId: string;
 }
 
 export interface DebateDeps {
@@ -17,60 +20,87 @@ export interface DebateDeps {
 }
 
 /**
- * Round 2. In each pair the majority voter argues once, the minority voter
- * replies and votes again. Each side is played by the same model that cast
- * that vote in round 1.
+ * Round 2. In each pair the majority voter and the minority voter take turns,
+ * up to MAX_TURNS, each ending its turn with where it now stands. A pair ends
+ * early once both hold the same vote. Each side is played by the same model
+ * that cast that vote in round 1, so every turn is pinned to it.
  */
 export async function runDebate(input: DebateInput, deps: DebateDeps): Promise<void> {
   const { chat, emit, signal } = deps;
-  const { question, choices, pairs } = input;
+  const { question, choices, pairs, mode } = input;
+  const client = clientTag(input.runId);
 
-  async function speak(pair: number, turn: "persuader" | "persuadee", model: string, messages: Parameters<ChatFn>[0]["messages"]) {
-    let partial = "";
-    try {
-      const result = await chat({
-        model,
-        messages,
-        temperature: 0.7,
-        signal,
-        onToken: (token) => {
-          partial += token;
-          emit({ type: "turn_token", pair, turn, token });
-        },
+  async function debatePair(i: number) {
+    const pair = pairs[i];
+    const votes: Record<Speaker, string> = { persuader: pair.persuader.choice, persuadee: pair.persuadee.choice };
+    const history: { speaker: Speaker; text: string; vote: string }[] = [];
+    emit({ type: "pair_start", pair: i });
+
+    for (let turn = 0; turn < MAX_TURNS && !signal.aborted; turn++) {
+      const speaker: Speaker = turn % 2 === 0 ? "persuader" : "persuadee";
+      const other: Speaker = speaker === "persuader" ? "persuadee" : "persuader";
+      emit({ type: "turn_start", pair: i, turn, speaker });
+
+      let text = "";
+      let requestId: string | null = null;
+      let failed = false;
+      try {
+        const result = await chat({
+          model: pair[speaker].model,
+          messages: turnMessages({
+            question,
+            choices,
+            mode,
+            speaker,
+            turn,
+            maxTurns: MAX_TURNS,
+            own: { original: pair[speaker].choice, current: votes[speaker], reasoning: pair[speaker].reasoning },
+            opponent: { original: pair[other].choice, current: votes[other] },
+            history,
+          }),
+          temperature: 0.7,
+          client,
+          signal,
+          onToken: (token) => {
+            text += token;
+            emit({ type: "turn_token", pair: i, turn, token });
+          },
+        });
+        text = result.text;
+        requestId = result.requestId;
+      } catch (err) {
+        if (signal.aborted) return;
+        failed = true;
+        if (err instanceof FlexrouterError) requestId = err.requestId;
+      }
+      if (requestId) emit({ type: "request", id: requestId, phase: "debate" });
+
+      const parsed = parseTurn(text, votes[speaker], choices);
+      votes[speaker] = parsed.vote;
+      history.push({ speaker, text: parsed.text, vote: parsed.vote });
+      emit({
+        type: "turn_done",
+        pair: i,
+        turn,
+        text: parsed.text || "(no reply: the model failed)",
+        vote: parsed.vote,
+        requestId,
       });
-      emit({ type: "call", call: callRecord("debate", model, result) });
-      return result.text;
-    } catch (err) {
-      if (err instanceof FlexrouterError) emit({ type: "call", call: callRecord("debate", model, err) });
-      return partial;
+
+      if (failed || votes.persuader === votes.persuadee) break;
     }
+
+    emit({
+      type: "verdict",
+      pair: i,
+      persuader: { finalChoice: votes.persuader, flipped: votes.persuader !== pair.persuader.choice },
+      persuadee: { finalChoice: votes.persuadee, flipped: votes.persuadee !== pair.persuadee.choice },
+    });
   }
 
   let next = 0;
   const lane = async () => {
-    while (next < pairs.length && !signal.aborted) {
-      const i = next++;
-      const { persuader, persuadee } = pairs[i];
-      emit({ type: "pair_start", pair: i });
-
-      const argument = (
-        await speak(i, "persuader", persuader.model, persuaderMessages(question, persuader, persuadee.choice))
-      ).trim();
-      emit({ type: "turn_done", pair: i, turn: "persuader", text: argument || "(no argument: the model failed)" });
-      if (signal.aborted) return;
-
-      const reply = await speak(
-        i,
-        "persuadee",
-        persuadee.model,
-        persuadeeMessages(question, persuadee, persuader.choice, argument, choices)
-      );
-      const { response, choice } = parsePersuadee(reply, choices);
-      emit({ type: "turn_done", pair: i, turn: "persuadee", text: response || "(no reply: the model failed)" });
-
-      const finalChoice = choice ?? persuadee.choice;
-      emit({ type: "verdict", pair: i, finalChoice, flipped: finalChoice !== persuadee.choice });
-    }
+    while (next < pairs.length && !signal.aborted) await debatePair(next++);
   };
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, pairs.length) }, lane));
 }

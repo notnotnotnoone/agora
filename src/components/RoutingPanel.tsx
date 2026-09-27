@@ -1,7 +1,7 @@
 "use client";
 
 import { useNow } from "@/hooks/useFlexrouter";
-import type { ArenaState } from "@/lib/arena";
+import { voteChain, type ArenaState } from "@/lib/arena";
 import { countdown } from "@/lib/format";
 import type { FlexrouterSnapshot, RosterModel } from "@/lib/types";
 import { Box } from "./ui";
@@ -42,7 +42,9 @@ export function RoutingPanel({ snapshot, state }: { snapshot: FlexrouterSnapshot
 
   const activity = new Map<string, string>();
   for (const v of state.votes) {
-    for (const s of v.skipped) activity.set(s.model, "skipped");
+    for (const link of voteChain(v)) if (link.kind === "failed") activity.set(link.model, "failed over");
+    for (const r of v.retries) if (r.model) activity.set(r.model, "answer didn't count");
+    if (!v.model) continue;
     if (v.status === "streaming") activity.set(v.model, "voting");
     if (v.status === "done" && v.choice) activity.set(v.model, `voted ${v.choice}`);
   }

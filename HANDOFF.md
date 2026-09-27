@@ -220,6 +220,20 @@ Treat these as proposals. They are in `d430731`, and the owner has not signed of
 3. **Keep** the unapproved choices, **except: restore the 5-turn and symmetric debate modes.**
 4. flexrouter's 8 unpushed local commits (Sessions 7/9/10): **fix, then push**. Pushed as `415f617`, with fixes for the two tests they broke (a model-level 403 marked the whole key Needs you, against ADR 0016; `set-retired` had no CSS rule). Three failures already on GitHub `master` remain: `test_page_links_every_area`, `test_a_429_is_classified_as_too_fast`, `test_a_provider_failure_is_recorded_as_an_attempt`.
 
+5. **Votes running at once could land on one model** (flexrouter picks at random among the top of a bucket, and a stream didn't say which model was answering). Answer: **the stream names its model.** flexrouter#1 now puts `"flexrouter": {"model": "provider/model"}` on every streamed chunk (ADR 0018). Each vote waits, up to 2.5 s, for the one before it to name its model, and excludes every model already taken. A vote that still lands on a taken model is stopped at its first token and asks again.
+
+## Progress (26 Sep 2026, local session)
+
+- **§11 done:** [flexrouter#1](https://github.com/notnotnotnoone/flexrouter/pull/1), open, not merged.
+- **§12 done on this branch**, checked against a real `flexrouter serve` from the PR branch with fake providers (one always 500, one always 429):
+  - votes ask the bucket with `X-Flexrouter-Client: agora-<run-id>` and `X-Flexrouter-Exclude`; no model voted twice; Agora's own retry loop is gone (it only re-asks after an off-format answer)
+  - failover chains on vote cards come from each request's journey
+  - the request log reads `/api/requests?client=agora-<run-id>`, with the Failover filter back; the journey panel reads `/api/requests/{id}`
+  - `callRecord()`, `call` events and `state.calls` are gone; Agora keeps only a request id → phase map
+  - round 2 has the 5-turn and symmetric modes back, ported from the old uncommitted `api/debate/route.ts` (with its transcript labelling fixed so each speaker sees itself as "You")
+- **Still to do (step 3):** run against the owner's real flexrouter and keys, replace `docs/screenshot.png` with a real run, then open the Agora PR.
+- **Found, not fixed:** flexrouter writes trace times as `...+00:00Z` (an offset *and* a Z), which `Date.parse` rejects. Agora reads them with `parseAt()`.
+
 Local note: run tests with `uv run python -m pytest -n auto`; `uv run pytest` fails with "trampoline failed to canonicalize script path" since the repo folder was renamed.
 
 ---
@@ -242,3 +256,4 @@ The owner's words, verbatim, in order.
 9. "Hey, do you want to handoff to a local session?"
 10. "MAKE ME A HANDOFF FILE WITH A LIST OF EVERYTHING WE DECIDED, LIKE IN THE GRILL, AND STUFF"
 11. (local session) §9 → "One vote per model"; flexrouter → "Push them, then branch"; Agora → "Hold until §12"; choices → "Restore 5-turn/symmetric"; the two broken tests → "Fix both, then push".
+12. (local session) Exclude wire shape → "Go, header"; step 2 → "go ahead with step 2"; parallel votes → "Stream names model".

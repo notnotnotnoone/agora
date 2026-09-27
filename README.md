@@ -8,9 +8,9 @@ A showcase for [flexrouter](https://github.com/notnotnotnoone/flexrouter): one l
 front of Groq, Cerebras, OpenRouter, Google AI Studio and the rest, pooling their free tiers
 and failing over when one runs dry.
 
-![Agora after a run: consensus, votes with their failover chains, live routing, provider mix and the request log](./docs/screenshot.png)
+![Agora after a run: consensus, votes with their failover chains, the TL;DR, a 5-turn debate, live routing, provider mix and the request log](./docs/screenshot.png)
 
-<sub>Screenshot from a local test setup with mock providers.</sub>
+<sub>A real run: 14 free-tier models from 3 providers through one flexrouter, $0.00 spent.</sub>
 
 </div>
 
@@ -58,9 +58,9 @@ npm install
 npm run dev                  # http://localhost:3000
 ```
 
-Agora asks every model in the bucket (`auto` unless you set `FLEXROUTER_BUCKET`), so the
+Agora asks flexrouter's built-in `all` bucket, which holds every model you have, so the
 more free-tier models you add to flexrouter, the bigger the crowd. It needs a flexrouter with
-the request-log API and the client and exclude headers
+the `all` bucket, the request-log API and the client and exclude headers
 ([flexrouter#1](https://github.com/notnotnotnoone/flexrouter/pull/1)). See flexrouter's
 [free tier stacking](https://github.com/notnotnotnoone/flexrouter#free-tier-stacking) section
 for a starting list.
@@ -73,7 +73,7 @@ All optional; put them in `.env.local` (see [`.env.example`](./.env.example)).
 |---|---|---|
 | `FLEXROUTER_URL` | `http://localhost:4891` | Where flexrouter is running |
 | `FLEXROUTER_TOKEN` | none | flexrouter's `auth_token` or dashboard password, if set |
-| `FLEXROUTER_BUCKET` | `auto` | Bucket that reads the options, casts the votes and writes the TL;DR |
+| `FLEXROUTER_BUCKET` | `all` | Bucket that reads the options, casts the votes and writes the TL;DR. With a bucket other than `all`, only its models vote. |
 | `FLEXROUTER_DASHBOARD_URL` | `FLEXROUTER_URL` | Where the browser opens flexrouter's dashboard |
 
 ## How it's built

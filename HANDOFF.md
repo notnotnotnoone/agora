@@ -46,7 +46,7 @@ list is rebuilt in flexrouter's shared config.
 All provider knowledge lives in flexrouter. Agora's settings are only:
 - `FLEXROUTER_URL` (default `http://localhost:4891`)
 - `FLEXROUTER_TOKEN` (flexrouter's `auth_token` / app password, if set)
-- `FLEXROUTER_BUCKET` (default `auto`)
+- `FLEXROUTER_BUCKET` (default `all`, flexrouter's built-in bucket of every model; see answer 6 below)
 - `FLEXROUTER_DASHBOARD_URL`
 
 ### §4 Single models are addressed by `provider/model`
@@ -176,7 +176,7 @@ Treat these as proposals. They are in `d430731`, and the owner has not signed of
   - `/api/debate` streams round 2.
   - `/api/flexrouter` gives the live roster + spend for the panels.
 - **Model calls:**
-  - Options are extracted through the bucket `FLEXROUTER_BUCKET` (default `auto`).
+  - Options are extracted through the bucket `FLEXROUTER_BUCKET` (default `all`).
   - The TL;DR comes from the first of the top-3 models by score that answers.
 - **Round 2:**
   - One argument and one reply per pair, persuaders shared out round-robin.
@@ -189,7 +189,7 @@ Treat these as proposals. They are in `d430731`, and the owner has not signed of
   - Runs saved by the old version are not shown.
 - **Request log outcomes are only OK / FAILED.** The "Failover" filter was dropped because Agora can't see failovers today (§10 fixes that; bring it back then).
 - **Tests and CI:** vitest (57 tests), plus a CI workflow running lint → typecheck → test → build.
-- **README screenshot** (`docs/screenshot.png`) is from mock providers and is captioned as such.
+- **README screenshot** (`docs/screenshot.png`) is a real run on the owner's flexrouter (step 3).
   - Replace it with a real run.
   - The old README's `demo.gif` never existed.
 
@@ -222,6 +222,8 @@ Treat these as proposals. They are in `d430731`, and the owner has not signed of
 
 5. **Votes running at once could land on one model** (flexrouter picks at random among the top of a bucket, and a stream didn't say which model was answering). Answer: **the stream names its model.** flexrouter#1 now puts `"flexrouter": {"model": "provider/model"}` on every streamed chunk (ADR 0018). Each vote waits, up to 2.5 s, for the one before it to name its model, and excludes every model already taken. A vote that still lands on a taken model is stopped at its first token and asks again.
 
+6. **A bucket call only reaches one bucket.** `auto` is just the bucket holding the best model; on the owner's setup that is `smart`, 6 of 23 models. In the first real run, 4 votes came back and the rest failed after trying every model in `smart`. Answer: **a built-in `all` bucket in flexrouter**, holding every model in every bucket once each (flexrouter#1, ADR 0019). Agora asks `all` by default, and counts as voters only the models in the bucket it asks.
+
 ## Progress (26 Sep 2026, local session)
 
 - **§11 done:** [flexrouter#1](https://github.com/notnotnotnoone/flexrouter/pull/1), open, not merged.
@@ -231,7 +233,10 @@ Treat these as proposals. They are in `d430731`, and the owner has not signed of
   - the request log reads `/api/requests?client=agora-<run-id>`, with the Failover filter back; the journey panel reads `/api/requests/{id}`
   - `callRecord()`, `call` events and `state.calls` are gone; Agora keeps only a request id → phase map
   - round 2 has the 5-turn and symmetric modes back, ported from the old uncommitted `api/debate/route.ts` (with its transcript labelling fixed so each speaker sees itself as "You")
-- **Still to do (step 3):** run against the owner's real flexrouter and keys, replace `docs/screenshot.png` with a real run, then open the Agora PR.
+- **Step 3, first real run** (owner's own flexrouter home and keys, flexrouter from the PR branch): found answer 6 above. flexrouter#1 gained the `all` bucket (`9628956`), which also makes pinned calls respect configured rpm/tpm.
+- **Step 3, second real run** with the `all` bucket: 14 votes from 14 different models over googleai, groq and mistral, 3 failovers, a TL;DR, and a 5-turn persuade debate (codestral-2508 held against gemini-3.5-flash-lite). The 5 votes that failed did so because every model left was busy, needed the owner or had voted; flexrouter's journeys say so. That run is `docs/screenshot.png`.
+- **Step 3 done:** the Agora PR is open.
+- **Found, not fixed:** a vote stopped because it landed on a model already answering another vote shows in the log with no phase ("-").
 - **Found, not fixed:** flexrouter writes trace times as `...+00:00Z` (an offset *and* a Z), which `Date.parse` rejects. Agora reads them with `parseAt()`.
 
 Local note: run tests with `uv run python -m pytest -n auto`; `uv run pytest` fails with "trampoline failed to canonicalize script path" since the repo folder was renamed.
@@ -257,3 +262,4 @@ The owner's words, verbatim, in order.
 10. "MAKE ME A HANDOFF FILE WITH A LIST OF EVERYTHING WE DECIDED, LIKE IN THE GRILL, AND STUFF"
 11. (local session) §9 → "One vote per model"; flexrouter → "Push them, then branch"; Agora → "Hold until §12"; choices → "Restore 5-turn/symmetric"; the two broken tests → "Fix both, then push".
 12. (local session) Exclude wire shape → "Go, header"; step 2 → "go ahead with step 2"; parallel votes → "Stream names model".
+13. (local session) "go ahead with step 3"; reaching every model → "All an "all" included bucket to flexrouter"; which kind → "Built into flexrouter (Recommended)".

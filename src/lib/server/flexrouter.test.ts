@@ -120,6 +120,24 @@ describe("roster", () => {
     mockFetch(JSON.stringify(entries));
     expect((await listModels()).map((m) => m.id)).toEqual(["b/hi", "a/low"]);
   });
+
+  it("keeps only the models in the bucket a run asks", async () => {
+    mockFetch(JSON.stringify({ data: [{ id: "smart", flexrouter: { kind: "bucket", models: ["a/low"] } }, ...entries.data] }));
+    expect((await listModels(undefined, "smart")).map((m) => m.id)).toEqual(["a/low"]);
+  });
+
+  it("follows auto to the bucket it stands for", async () => {
+    mockFetch(
+      JSON.stringify({
+        data: [
+          { id: "smart", flexrouter: { kind: "bucket", models: ["b/hi"] } },
+          { id: "auto", flexrouter: { kind: "bucket", models: [], resolves_to: "smart" } },
+          ...entries.data,
+        ],
+      })
+    );
+    expect((await listModels(undefined, "auto")).map((m) => m.id)).toEqual(["b/hi"]);
+  });
 });
 
 describe("request log", () => {

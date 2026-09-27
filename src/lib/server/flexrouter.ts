@@ -10,8 +10,8 @@ import type { Attempt, ChatMessage, Journey, Model, ModelState, RequestOutcome, 
 const BASE_URL = (process.env.FLEXROUTER_URL ?? "http://localhost:4891").replace(/\/+$/, "");
 const TOKEN = process.env.FLEXROUTER_TOKEN;
 
-/** Bucket for calls where the exact model doesn't matter; "auto" = flexrouter's best bucket. */
-export const BUCKET = process.env.FLEXROUTER_BUCKET ?? "auto";
+/** The bucket every call asks. "all" is flexrouter's built-in bucket of every model (its ADR 0019). */
+export const BUCKET = process.env.FLEXROUTER_BUCKET ?? "all";
 
 /** Where the browser can open flexrouter's own dashboard. */
 export const DASHBOARD_URL = (process.env.FLEXROUTER_DASHBOARD_URL ?? BASE_URL).replace(/\/+$/, "");
@@ -64,6 +64,10 @@ interface ModelEntry {
   id: string;
   flexrouter?: {
     kind?: string;
+    /** A bucket's models, as "provider/model" ids. */
+    models?: string[];
+    /** What `auto` stands for. */
+    resolves_to?: string;
     provider?: string;
     model?: string;
     score?: number;
@@ -72,11 +76,18 @@ interface ModelEntry {
   };
 }
 
-/** Every model flexrouter knows, with its live status, best score first. */
-export async function getRoster(signal?: AbortSignal): Promise<RosterModel[]> {
+async function modelEntries(signal?: AbortSignal): Promise<ModelEntry[]> {
   const res = await request("/v1/models", { signal });
   if (!res.ok) throw new FlexrouterError(`flexrouter /v1/models answered ${res.status}`);
-  const { data } = (await res.json()) as { data: ModelEntry[] };
+  return ((await res.json()) as { data: ModelEntry[] }).data;
+}
+
+/** Every model flexrouter knows, with its live status, best score first. */
+export async function getRoster(signal?: AbortSignal): Promise<RosterModel[]> {
+  return roster(await modelEntries(signal));
+}
+
+function roster(data: ModelEntry[]): RosterModel[] {
   return data
     .filter((e) => e.flexrouter?.kind === "model")
     .map((e) => {
@@ -95,10 +106,19 @@ export async function getRoster(signal?: AbortSignal): Promise<RosterModel[]> {
     .sort((a, b) => b.score - a.score);
 }
 
-/** The models a run can use: everything not waiting on a human. */
-export async function listModels(signal?: AbortSignal): Promise<Model[]> {
-  return (await getRoster(signal))
-    .filter((m) => !UNUSABLE.has(m.state))
+/**
+ * The models a run can use: those in `bucket` that aren't waiting on a human.
+ * A bucket flexrouter doesn't list models for (an older flexrouter's `all`)
+ * counts as every model.
+ */
+export async function listModels(signal?: AbortSignal, bucket = BUCKET): Promise<Model[]> {
+  const data = await modelEntries(signal);
+  const entry = (id: string) => data.find((e) => e.id === id && e.flexrouter?.kind === "bucket");
+  let found = entry(bucket);
+  if (found?.flexrouter?.resolves_to) found = entry(found.flexrouter.resolves_to);
+  const members = found?.flexrouter?.models?.length ? new Set(found.flexrouter.models) : null;
+  return roster(data)
+    .filter((m) => !UNUSABLE.has(m.state) && (!members || members.has(m.id)))
     .map(({ id, provider, name, score, vision }) => ({ id, provider, name, score, vision }));
 }
 

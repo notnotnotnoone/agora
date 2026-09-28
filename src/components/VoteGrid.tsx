@@ -1,3 +1,6 @@
+"use client";
+
+import { useState } from "react";
 import { voteChain, type ArenaState } from "@/lib/arena";
 import { ms, modelName, num, providerOf } from "@/lib/format";
 import type { Vote } from "@/lib/types";
@@ -32,6 +35,37 @@ function Chain({ vote }: { vote: Vote }) {
   );
 }
 
+/** Text clamped to a few lines, with a toggle to read all of it. */
+function Expandable({ text, collapsed, className }: { text: string; collapsed?: string; className?: string }) {
+  const [open, setOpen] = useState(false);
+  const long = text.length > 280 || text.split("\n").length > 5;
+  return (
+    <>
+      <p className={["vote-text", open && "open", className].filter(Boolean).join(" ")}>
+        {open ? text : (collapsed ?? text)}
+      </p>
+      {long && (
+        <button className="more" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+          {open ? "show less" : "show more"}
+        </button>
+      )}
+    </>
+  );
+}
+
+/** A collapsed section holding a long block of the model's own words. */
+function Section({ label, text }: { label: string; text: string }) {
+  const words = text.trim().split(/\s+/).length;
+  return (
+    <details>
+      <summary>
+        {label} <span className="dim">· {num(words)} words</span>
+      </summary>
+      <p className="full-text">{text.trim()}</p>
+    </details>
+  );
+}
+
 function VoteCard({ vote, choices }: { vote: Vote; choices: string[] }) {
   const reason = vote.choice ? vote.reasons[vote.choice] : "";
   const tail = vote.text.length > 320 ? `…${vote.text.slice(-320)}` : vote.text;
@@ -48,9 +82,9 @@ function VoteCard({ vote, choices }: { vote: Vote; choices: string[] }) {
         {vote.status === "failed" && <Tag tone="bad">no vote</Tag>}
       </div>
       <Chain vote={vote} />
-      {vote.status === "streaming" && vote.model && <p className="vote-text cursor">{tail}</p>}
+      {vote.status === "streaming" && vote.model && <Expandable text={vote.text} collapsed={tail} className="cursor" />}
       {vote.status === "failed" && vote.error && <p className="vote-text dim">{vote.error}</p>}
-      {vote.status === "done" && reason && <p className="vote-text">{reason}</p>}
+      {vote.status === "done" && reason && <Expandable text={reason} />}
       {vote.status === "done" && (
         <>
           <details>
@@ -64,6 +98,8 @@ function VoteCard({ vote, choices }: { vote: Vote; choices: string[] }) {
               ))}
             </ul>
           </details>
+          {vote.thinking?.trim() && <Section label="Model reasoning" text={vote.thinking} />}
+          {vote.text.trim() && <Section label="Full reply" text={vote.text} />}
           <div className="vote-foot">
             {vote.ms !== undefined && <span className="n">{ms(vote.ms)}</span>}
             {vote.usage && <span className="n">{num(vote.usage.in + vote.usage.out)} tok</span>}

@@ -145,10 +145,16 @@ export interface ChatRequest {
   /** Called once, as soon as flexrouter names the model answering. */
   onModel?: (model: string) => void;
   onToken?: (token: string) => void;
+  /** Chain-of-thought tokens, from models that stream them apart from the reply. */
+  onReasoning?: (token: string) => void;
+  /** Called once flexrouter has accepted the request, with its id. */
+  onRequest?: (requestId: string) => void;
 }
 
 export interface ChatResult {
   text: string;
+  /** Chain-of-thought, if the model streamed any. */
+  reasoning: string;
   requestId: string | null;
   /** The model that answered, as flexrouter's stream named it; for a pinned call, the pin. */
   answeredBy: string | null;
@@ -194,7 +200,18 @@ const pinned = (model: string) => (model.includes("/") ? model : null);
  * any failure, including one reported inside an HTTP 200 stream, carrying the
  * attempts flexrouter made.
  */
-export const streamChat: ChatFn = async ({ model, messages, temperature, client, exclude, signal, onModel, onToken }) => {
+export const streamChat: ChatFn = async ({
+  model,
+  messages,
+  temperature,
+  client,
+  exclude,
+  signal,
+  onModel,
+  onToken,
+  onReasoning,
+  onRequest,
+}) => {
   const started = Date.now();
   const options: Record<string, string> = {};
   if (client) options[CLIENT_HEADER] = client;
@@ -205,6 +222,7 @@ export const streamChat: ChatFn = async ({ model, messages, temperature, client,
     options
   );
   const requestId = res.headers.get(REQUEST_ID_HEADER);
+  if (requestId) onRequest?.(requestId);
 
   if (!res.ok || !res.body) {
     const body = (await res.json().catch(() => null)) as ErrorBody | null;
@@ -212,13 +230,14 @@ export const streamChat: ChatFn = async ({ model, messages, temperature, client,
   }
 
   let text = "";
+  let reasoning = "";
   let usage: Usage = { in: 0, out: 0 };
   let answeredBy = pinned(model);
   if (answeredBy) onModel?.(answeredBy);
   for await (const data of readEvents(res.body)) {
     let chunk: ErrorBody & {
       flexrouter?: { model?: string };
-      choices?: { delta?: { content?: string } }[];
+      choices?: { delta?: { content?: string; reasoning_content?: string; reasoning?: string } }[];
       usage?: { prompt_tokens?: number; completion_tokens?: number };
     };
     try {
@@ -232,14 +251,20 @@ export const streamChat: ChatFn = async ({ model, messages, temperature, client,
       answeredBy = chunk.flexrouter.model;
       onModel?.(answeredBy);
     }
-    const token = chunk.choices?.[0]?.delta?.content;
+    const delta = chunk.choices?.[0]?.delta;
+    const thought = delta?.reasoning_content ?? delta?.reasoning;
+    if (thought) {
+      reasoning += thought;
+      onReasoning?.(thought);
+    }
+    const token = delta?.content;
     if (token) {
       text += token;
       onToken?.(token);
     }
   }
 
-  return { text, requestId, answeredBy, usage, ms: Date.now() - started };
+  return { text, reasoning, requestId, answeredBy, usage, ms: Date.now() - started };
 };
 
 // ── flexrouter's request log ────────────────────────────────────────────

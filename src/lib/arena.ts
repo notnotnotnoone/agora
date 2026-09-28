@@ -23,6 +23,11 @@ export interface DebateTurn {
   /** Where the speaker stood at the end of the turn; null while it's speaking. */
   vote: string | null;
   done: boolean;
+  /**
+   * Set when the debater's own model couldn't take this turn and flexrouter
+   * found a stand-in: the stand-in's model, or "" while it's still routing.
+   */
+  standIn?: string;
 }
 
 export interface Verdict {
@@ -34,6 +39,8 @@ export interface Exchange {
   started: boolean;
   turns: DebateTurn[];
   verdict: Verdict | null;
+  /** Why the pair ended early, if it did. */
+  skipped?: string;
 }
 
 export interface DebateState {
@@ -151,6 +158,7 @@ function runEvent(state: ArenaState, event: RunEvent): ArenaState {
           usage: event.usage,
           requestId: event.requestId,
           journey: event.journey,
+          thinking: event.thinking,
         })),
       };
     case "vote_failed":
@@ -193,6 +201,17 @@ function debateEvent(state: ArenaState, event: DebateEvent): ArenaState {
       }));
     case "turn_token":
       return exchange(event.pair, (e) => updateTurn(e, event.turn, (t) => ({ ...t, text: t.text + event.token })));
+    case "turn_standin":
+      return exchange(event.pair, (e) =>
+        updateTurn(e, event.turn, (t) => ({
+          ...t,
+          // A fresh stand-in starts the turn over; naming its model keeps the text.
+          text: event.model === null ? "" : t.text,
+          standIn: event.model ?? "",
+        }))
+      );
+    case "pair_skipped":
+      return exchange(event.pair, (e) => ({ ...e, skipped: event.reason }));
     case "turn_done":
       return exchange(event.pair, (e) =>
         updateTurn(e, event.turn, (t) => ({ ...t, text: event.text, vote: event.vote, done: true }))

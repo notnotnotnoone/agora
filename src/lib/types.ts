@@ -120,6 +120,8 @@ export interface Vote {
   journey: Journey | null;
   /** Earlier requests for this vote that didn't produce one. */
   retries: Retry[];
+  /** Chain-of-thought, for models that stream it separately from their reply. */
+  thinking?: string;
   ms?: number;
   usage?: Usage;
   error?: string;
@@ -142,6 +144,7 @@ export type RunEvent =
       usage: Usage;
       requestId: string | null;
       journey: Journey | null;
+      thinking?: string;
     }
   | { type: "vote_failed"; slot: number; reason: string; requestId: string | null; journey: Journey | null }
   | { type: "summary_start"; model: string | null }
@@ -166,6 +169,10 @@ export type DebateEvent =
   | { type: "pair_start"; pair: number }
   | { type: "turn_start"; pair: number; turn: number; speaker: Speaker }
   | { type: "turn_token"; pair: number; turn: number; token: string }
+  /** The debater's own model failed or stalled; a stand-in from the bucket takes this turn. */
+  | { type: "turn_standin"; pair: number; turn: number; model: string | null }
+  /** The pair ended early: skipped by the viewer, or no model could take a turn in time. */
+  | { type: "pair_skipped"; pair: number; reason: string }
   | { type: "turn_done"; pair: number; turn: number; text: string; vote: string; requestId: string | null }
   | { type: "request"; id: string; phase: Phase }
   | {

@@ -80,3 +80,13 @@ export function parseDebateBody(
     value: { question: q, choices: choices as string[], pairs: pairs as DebatePair[], mode: mode as DebateMode, runId: body.runId },
   };
 }
+
+export function parseSkipBody(body: unknown): Result<{ runId: string; pair: number | "all" }> {
+  if (!isRecord(body)) return { ok: false, error: "Expected a JSON object" };
+  if (!isRunId(body.runId)) return { ok: false, error: "runId must be 1-40 letters, digits or dashes" };
+  const { pair } = body;
+  if (pair !== "all" && !(typeof pair === "number" && Number.isInteger(pair) && pair >= 0 && pair < MAX_PAIRS)) {
+    return { ok: false, error: `pair must be "all" or a pair index from 0 to ${MAX_PAIRS - 1}` };
+  }
+  return { ok: true, value: { runId: body.runId, pair } };
+}

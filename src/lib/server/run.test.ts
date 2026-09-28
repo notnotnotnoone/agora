@@ -14,6 +14,8 @@ const model = (id: string, score = 50): Model => ({
 const VOTE_YES = "OPTION [YES]: saves five.\nOPTION [NO]: no direct harm.\nANSWER: YES";
 
 type Reply = string | FlexrouterError;
+/** A model that is named as answering and then goes quiet. */
+const SILENT = "__silent__";
 
 const tick = () => new Promise((r) => setTimeout(r, 1));
 
@@ -65,12 +67,17 @@ function fakeFlexrouter(
     if (reply instanceof FlexrouterError) throw new FlexrouterError(reply.message, id);
     req.onModel?.(answering);
     stopIfAborted(req);
+    if (reply === SILENT) {
+      // Accepts the request, then never says a word.
+      await new Promise((resolve) => req.signal?.addEventListener("abort", resolve));
+      stopIfAborted(req);
+    }
     for (const token of reply.match(/.{1,5}/gs) ?? []) {
       await tick();
       stopIfAborted(req);
       req.onToken?.(token);
     }
-    return { text: reply, requestId: id, answeredBy: answering, usage: { in: 10, out: 5 }, ms: 3 };
+    return { text: reply, reasoning: "", requestId: id, answeredBy: answering, usage: { in: 10, out: 5 }, ms: 3 };
   };
   const journey = async (id: string): Promise<Journey> => ({
     id,
@@ -92,7 +99,8 @@ async function run(
   models: Model[],
   votes: number,
   signal?: AbortSignal,
-  waitForModelMs?: number
+  waitForModelMs?: number,
+  extra: Partial<RunDeps> = {}
 ) {
   const events: RunEvent[] = [];
   const deps: RunDeps = {
@@ -103,6 +111,7 @@ async function run(
     emit: (e) => events.push(e),
     signal: signal ?? new AbortController().signal,
     waitForModelMs,
+    ...extra,
   };
   await runRound({ question: "Pull the lever?", votes, runId: "r1" }, deps);
   return events;
@@ -213,9 +222,58 @@ describe("runRound", () => {
     expect(of(events, "summary_start")).toHaveLength(0);
   });
 
+  const fast = { routeMs: 40, firstTokenMs: 20, idleMs: 20 };
+
+  it("moves a vote off a model that goes quiet, and keeps it from voting", async () => {
+    const fake = fakeFlexrouter(ids, { "a/1": SILENT });
+    const events = await run(fake, models, 2, undefined, 5, { liveness: fast });
+    const [retry] = of(events, "vote_retry");
+    expect(retry.retry).toMatchObject({ model: "a/1", reason: expect.stringMatching(/never started/) });
+    expect(of(events, "vote_done")).toHaveLength(2);
+    // a/1 is named once, goes quiet, and the vote moves on to models that answer.
+    expect(of(events, "vote_model").map((e) => e.model)).toEqual(["a/1", "a/2", "b/1"]);
+  });
+
+  it("closes voting when the window ends and still writes the summary", async () => {
+    const fake = fakeFlexrouter(ids, { "b/1": SILENT, "b/2": SILENT, "c/1": SILENT });
+    const events = await run(fake, models, 5, undefined, 5, {
+      votingWindowMs: 60,
+      liveness: { routeMs: 1000, firstTokenMs: 1000, idleMs: 1000 },
+    });
+    expect(of(events, "vote_done")).toHaveLength(2);
+    expect(of(events, "vote_failed").map((e) => e.reason)).toEqual(
+      expect.arrayContaining([expect.stringMatching(/out of time/i)])
+    );
+    expect(of(events, "summary_start")).toHaveLength(1);
+  });
+
+  it("asks a second model for the options when the first stalls", async () => {
+    const fake = fakeFlexrouter(ids);
+    let first = true;
+    const chat: ChatFn = async (req) => {
+      if (first && req.messages[0].content.includes("CHOICES:")) {
+        first = false;
+        req.onModel?.("a/1");
+        await new Promise((resolve) => req.signal?.addEventListener("abort", resolve));
+        throw new DOMException("aborted", "AbortError");
+      }
+      return fake.chat(req);
+    };
+    const events = await run({ ...fake, chat }, models, 1, undefined, 5, { liveness: fast });
+    expect(fake.asked[0].exclude).toEqual(["a/1"]);
+    expect(of(events, "choices")).toHaveLength(1);
+  });
+
+  it("leaves a model that stalled out of every later call in the run", async () => {
+    const fake = fakeFlexrouter(ids, { "a/1": SILENT });
+    await run(fake, models, 2, undefined, 5, { liveness: fast });
+    const summary = fake.asked.find((r) => !r.messages[0].content.includes("OPTION [") && !r.messages[0].content.includes("CHOICES:"));
+    expect(summary?.exclude).toEqual(["a/1"]);
+  });
+
   it("fails the run when the options can't be extracted", async () => {
     const fake = fakeFlexrouter(ids);
-    const chat: ChatFn = async () => ({ text: "no idea", requestId: null, answeredBy: null, usage: { in: 0, out: 0 }, ms: 1 });
+    const chat: ChatFn = async () => ({ text: "no idea", reasoning: "", requestId: null, answeredBy: null, usage: { in: 0, out: 0 }, ms: 1 });
     await expect(run({ ...fake, chat }, models, 2)).rejects.toThrow(/options/);
   });
 });

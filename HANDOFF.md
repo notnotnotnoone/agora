@@ -241,6 +241,35 @@ Treat these as proposals. They are in `d430731`, and the owner has not signed of
 
 Local note: run tests with `uv run python -m pytest -n auto`; `uv run pytest` fails with "trampoline failed to canonicalize script path" since the repo folder was renamed.
 
+## Progress (28 Sep 2026, cloud session, branch `claude/blissful-lovelace-6gcxaj`)
+
+The owner asked for: skipping/rerouting in round 2, better prompts, expandable reasoning and
+reply text in round 1, and more aggressive routing ("hanging is not a good look", flexrouter's
+~30s give-up should almost never show). Built on top of this PR's branch, within §9/§12
+(flexrouter still picks and fails over; Agora only stops calls that make no progress and asks again):
+
+- **Stall guard** (`src/lib/server/guard.ts`): every call has its own clock: 8s for flexrouter to
+  name a model, 8s from then to the first token (reasoning tokens count), 6s max silence
+  mid-answer (debate: 6/6/5s). A stalled call throws `StallError` and the caller re-asks.
+- **Round 1:** a stalled vote re-asks, and the stalled model stays excluded. Any model that
+  stalls is left out of every later call in the run (extraction, votes, summary). Extraction and
+  the summary each get one retry on a stall. Voting closes after 25s and the round moves on
+  with the votes it has; at most 5 requests per vote; 8 votes in flight, 1.2s naming wait.
+- **Round 2:** a turn whose pinned model fails or stalls goes to up to 2 stand-ins from the
+  bucket (excluding both debaters and any model that stalled in the debate). The stand-in is
+  shown as "<model> for <debater>". If none answers, the pair ends "cut short" with votes as
+  they stood. "Skip" per pair and "Skip remaining" go through `POST /api/debate/skip`
+  (an in-process registry keyed by run id). 6 pairs in flight.
+- **Prompts** rewritten (extract, vote, summary, debate turns); `matchChoice` takes
+  "YES, because…" so fewer answers are thrown away.
+- **Vote cards:** clamped text has "show more"; "Model reasoning" (streamed
+  `reasoning_content`, if flexrouter forwards it) and "Full reply" sections.
+- Checked against a fake flexrouter with a model that goes silent and one that stalls when
+  debating: round 1 in ~14s (one 8s stall, then avoided), round 2 finished with stand-ins.
+- **Worth doing in flexrouter:** a per-request cap on how long a bucket call may wait for a
+  free model (for example a header) would let Agora stop waiting sooner than its 8s naming
+  timeout when everything is rate-limited.
+
 ---
 
 ## Answer log

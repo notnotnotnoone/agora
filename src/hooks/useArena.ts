@@ -84,6 +84,27 @@ export function useArena() {
     [cancel, state.votes, state.question, state.choices, state.runId]
   );
 
+  /** Skips one debate pair, or every pair still going. */
+  const skipPair = useCallback(
+    async (pair: number | "all") => {
+      if (!state.runId) return;
+      const res = await fetch("/api/debate/skip", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ runId: state.runId, pair }),
+      }).catch(() => null);
+      if (res?.ok) return; // the server ends the pair and reports it on the stream
+      // The server has no such debate running; stop waiting on it here.
+      if (pair === "all") {
+        cancel();
+        dispatch({ type: "debate_stop" });
+      } else {
+        dispatch({ type: "debate", event: { type: "pair_skipped", pair, reason: "Skipped" } });
+      }
+    },
+    [cancel, state.runId]
+  );
+
   const load = useCallback(
     (run: SavedRun) => {
       cancel();
@@ -102,5 +123,5 @@ export function useArena() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.phase, debateRunning, state.fromHistory, state.runId]);
 
-  return { state, live: isLive(state.phase), start, stop, startDebate, load };
+  return { state, live: isLive(state.phase), start, stop, startDebate, skipPair, load };
 }

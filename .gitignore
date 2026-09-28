@@ -32,8 +32,9 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
-# secrets / model config (holds API keys — never commit)
+# old Agora provider config (held API keys; keys now live in flexrouter)
 config.yaml
 config.local.yaml
 

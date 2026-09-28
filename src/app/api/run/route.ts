@@ -1,189 +1,25 @@
-import { loadModels } from "@/lib/config-loader";
-import { buildHeaders, encodeSSE } from "@/lib/llm";
-import type { ModelConfig, RunEvent } from "@/lib/types";
+import { BUCKET, getJourney, listModels, streamChat } from "@/lib/server/flexrouter";
+import { runRound } from "@/lib/server/run";
+import { badRequest, eventStream } from "@/lib/server/stream";
+import { parseRunBody } from "@/lib/server/validate";
+import type { RunEvent } from "@/lib/types";
 
-export const dynamic = "force-dynamic";
+export async function POST(request: Request) {
+  const parsed = parseRunBody(await request.json().catch(() => null));
+  if (!parsed.ok) return badRequest(parsed.error);
 
-function buildSystemPrompt(choices: string[]): string {
-  const list = choices.join(", ");
-  const optionLines = choices.map((c) => `OPTION [${c}]: <specific reason why you would or would not choose this option>`).join("\n");
-  return `You are answering a moral dilemma question. Think through every available option carefully.
-
-You MUST format your response EXACTLY as follows — one OPTION block per choice, then ANSWER:
-
-${optionLines}
-ANSWER: <one of: ${list}>
-
-Rules:
-- You MUST write an OPTION block for EVERY option listed above. Do not skip any.
-- Each OPTION block must give a specific, concrete reason — not vague platitudes like "this seems right". Explain the actual moral reasoning for choosing or rejecting that option.
-- The ANSWER line must contain exactly one of the listed options verbatim: ${list}.`;
-}
-
-function parseResponse(
-  text: string,
-  choices: string[]
-): { vote: string | null; optionReasons: Record<string, string> } {
-  const answerMatch = text.match(/ANSWER:[ \t]*(.+?)[\r\n]*$/im);
-  const rawAnswer = answerMatch ? answerMatch[1].trim() : null;
-  const vote = rawAnswer
-    ? (choices.find((c) => c.toLowerCase() === rawAnswer.toLowerCase()) ?? null)
-    : null;
-
-  const optionReasons: Record<string, string> = {};
-  for (const choice of choices) {
-    const escaped = choice.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const pattern = new RegExp(`OPTION\\s*\\[${escaped}\\]:\\s*([\\s\\S]*?)(?=\\nOPTION\\s*\\[|\\n+ANSWER:|(?:\\n|$))`, "i");
-    const match = text.match(pattern);
-    optionReasons[choice] = match ? match[1].trim() : "";
-  }
-
-  return { vote, optionReasons };
-}
-
-async function trySingleRequest(
-  model: ModelConfig,
-  question: string,
-  choices: string[]
-): Promise<{ vote: string; optionReasons: Record<string, string> } | null> {
-  try {
-    const res = await fetch(`${model.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: buildHeaders(model),
-      body: JSON.stringify({
-        model: model.modelName,
-        messages: [
-          { role: "system", content: buildSystemPrompt(choices) },
-          { role: "user", content: question },
-        ],
-        stream: true,
-        temperature: 0.9,
-      }),
-    });
-
-    if (!res.ok || !res.body) return null;
-
-    let fullText = "";
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const chunk = dec.decode(value, { stream: true });
-      for (const line of chunk.split("\n")) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith("data:")) continue;
-        const jsonStr = trimmed.slice(5).trim();
-        if (jsonStr === "[DONE]") break;
-        try {
-          const parsed = JSON.parse(jsonStr);
-          const token: string = parsed?.choices?.[0]?.delta?.content ?? "";
-          if (token) fullText += token;
-        } catch {
-          // skip malformed lines
-        }
-      }
+  return eventStream<RunEvent>(request, async (emit, signal) => {
+    const models = await listModels(signal);
+    if (models.length === 0) {
+      throw new Error("flexrouter has no usable models. Add some to its config.yaml, or check `flexrouter doctor`.");
     }
-
-    const { vote, optionReasons } = parseResponse(fullText, choices);
-    if (!vote) return null;
-    return { vote, optionReasons };
-  } catch {
-    return null;
-  }
-}
-
-export async function POST(req: Request) {
-  const { question, choices, targetCount } = (await req.json()) as {
-    question: string;
-    choices: string[];
-    targetCount: number;
-  };
-
-  const models = loadModels();
-  const MAX_RETRIES = 3;
-  const CONCURRENCY = Math.min(models.length, 5, targetCount);
-  const MAX_TOTAL_ATTEMPTS = targetCount * MAX_RETRIES * 3;
-
-  let validCount = 0;
-  let modelRobin = 0;
-  let slotSeq = 0;
-  let totalAttempts = 0;
-  let closed = false;
-
-  const encoder = new TextEncoder();
-
-  const stream = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      const send = (event: RunEvent) => {
-        if (closed) return;
-        try {
-          controller.enqueue(encoder.encode(encodeSSE(event)));
-        } catch {
-          closed = true;
-        }
-      };
-
-      const finish = () => {
-        if (closed) return;
-        closed = true;
-        try {
-          controller.enqueue(encoder.encode(encodeSSE({ type: "all_done" })));
-          controller.close();
-        } catch {}
-      };
-
-      async function worker() {
-        while (!closed) {
-          if (totalAttempts >= MAX_TOTAL_ATTEMPTS) {
-            console.error("Agora: exhausted global attempt budget");
-            return;
-          }
-
-          const mySlot = slotSeq++;
-          let succeeded = false;
-
-          for (let retry = 0; retry < MAX_RETRIES; retry++) {
-            if (closed) return;
-            totalAttempts++;
-            const model = models[modelRobin++ % models.length];
-            const result = await trySingleRequest(model, question, choices);
-
-            if (result !== null) {
-              validCount++;
-              send({ type: "response_start", modelId: model.id, requestIndex: mySlot });
-              send({
-                type: "response_done",
-                modelId: model.id,
-                requestIndex: mySlot,
-                vote: result.vote,
-                reasoning: "",
-                optionReasons: result.optionReasons,
-              });
-              if (validCount >= targetCount) finish();
-              succeeded = true;
-              break;
-            }
-          }
-
-          if (!succeeded) {
-            console.log(`Agora: slot ${mySlot} exhausted ${MAX_RETRIES} retries`);
-          }
-        }
-      }
-
-      const workers = Array.from({ length: CONCURRENCY }, () => worker());
-      await Promise.allSettled(workers);
-      finish();
-    },
-  });
-
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-    },
+    await runRound(parsed.value, {
+      chat: streamChat,
+      journey: (id) => getJourney(id, signal),
+      models,
+      bucket: BUCKET,
+      emit,
+      signal,
+    });
   });
 }

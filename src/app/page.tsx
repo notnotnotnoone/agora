@@ -97,7 +97,12 @@ export default function Home() {
       const res = await fetch("/api/tldr", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: q, responses: collected, choices: extractedChoices }),
+        // Send only the parsed fields — full replies/reasoning would bloat the synthesizer prompt.
+        body: JSON.stringify({
+          question: q,
+          responses: collected.map((r) => ({ ...r, rawText: "", thinking: undefined })),
+          choices: extractedChoices,
+        }),
         signal,
       });
 
@@ -146,6 +151,8 @@ export default function Home() {
           vote: r.vote,
           reasoning: r.reasoning,
           optionReasons: r.optionReasons,
+          rawText: r.rawText,
+          thinking: r.thinking,
         })),
       };
       saveRun(historyRun).catch(console.error);
@@ -216,12 +223,17 @@ export default function Home() {
 
       const reader = res.body.getReader();
       const dec = new TextDecoder();
+      let buf = "";
+      let sawAllDone = false;
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        const chunk = dec.decode(value, { stream: true });
-        for (const line of chunk.split("\n")) {
+        buf += dec.decode(value, { stream: true });
+        // Events can straddle network chunks — only parse complete lines.
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
           const trimmed = line.trim();
           if (!trimmed.startsWith("data:")) continue;
           const jsonStr = trimmed.slice(5).trim();
@@ -249,7 +261,16 @@ export default function Home() {
             setResponses((prev) =>
               prev.map((r) =>
                 r.modelId === event.modelId && r.requestIndex === event.requestIndex
-                  ? { ...r, status: "done", vote: event.vote, reasoning: event.reasoning, optionReasons: event.optionReasons }
+                  ? {
+                      ...r,
+                      status: "done",
+                      vote: event.vote,
+                      reasoning: event.reasoning,
+                      optionReasons: event.optionReasons,
+                      rawText: event.rawText ?? "",
+                      thinking: event.thinking ?? "",
+                      latencyMs: event.latencyMs,
+                    }
                   : r
               )
             );
@@ -260,14 +281,22 @@ export default function Home() {
               vote: event.vote,
               reasoning: event.reasoning,
               optionReasons: event.optionReasons,
-              rawText: "",
+              rawText: event.rawText ?? "",
+              thinking: event.thinking ?? "",
+              latencyMs: event.latencyMs,
             };
             collectedResponses.push(updated);
           } else if (event.type === "all_done") {
+            sawAllDone = true;
             setRunning(false);
             triggerTldr(question, collectedResponses, extractedChoices, ctrl.signal);
           }
         }
+      }
+      // Connection dropped without all_done: still wrap up with what we have.
+      if (!sawAllDone && !ctrl.signal.aborted) {
+        setRunning(false);
+        if (collectedResponses.length > 0) triggerTldr(question, collectedResponses, extractedChoices, ctrl.signal);
       }
     } catch (err: unknown) {
       if (err instanceof Error && err.name !== "AbortError") {
@@ -294,7 +323,8 @@ export default function Home() {
       vote: r.vote,
       reasoning: r.reasoning,
       optionReasons: r.optionReasons,
-      rawText: "",
+      rawText: r.rawText ?? "",
+      thinking: r.thinking,
     }));
     setResponses(loaded);
     setRunning(false);

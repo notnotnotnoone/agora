@@ -1,113 +1,73 @@
 import { loadModels } from "@/lib/config-loader";
-import { buildHeaders, encodeSSE } from "@/lib/llm";
-import type { ModelConfig, DebateEvent, DebatePair } from "@/lib/types";
+import { encodeSSE, parseAnswer, routeChat, splitThink, type ChatMessage } from "@/lib/llm";
+import type { DebateEvent, DebatePair } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
 const MAX_PAIRS = 20;
 
-function buildPersuaderSystem(persuaderVote: string, persuadeeVote: string): string {
-  return `You argued for ${persuaderVote} on this moral dilemma. Your opponent chose ${persuadeeVote}.
-Make your strongest case to change their mind. Be direct, use concrete reasoning, keep it under 200 words.
-You MUST format your response as:
-ARGUMENT: <your persuasion, under 200 words>`;
+// Each turn gets its own budget so a whole pair always resolves in under ~30s.
+// Slow models are raced against a backup early; a dead turn skips the pair.
+const TURN_DEADLINE_MS = 13_000;
+const HEDGE_AFTER_MS = 3_500;
+const FIRST_TOKEN_TIMEOUT_MS = 6_000;
+const IDLE_TIMEOUT_MS = 5_000;
+
+type Turn = "persuader" | "persuadee";
+
+function buildPersuaderSystem(pair: DebatePair, choices: string[]): string {
+  return `You are in a one-on-one debate about an ethical dilemma. You voted "${pair.persuaderVote}". Your opponent voted "${pair.persuadeeVote}". Your goal is to get them to switch to "${pair.persuaderVote}".
+
+Your own reasoning from the vote:
+${pair.persuaderReasoning || "(not recorded)"}
+
+Your opponent's reasoning:
+${pair.persuadeeReasoning || "(not recorded)"}
+
+How to argue well:
+- Engage THEIR reasoning directly. Identify the consideration their vote rests on, then show why it fails, is outweighed, or actually supports "${pair.persuaderVote}".
+- Lead with your single strongest point. Use a concrete example, analogy, or consequence rather than abstract principles.
+- Acknowledge anything they got right — conceding a minor point makes the main point land harder.
+- No preamble, no "great question", no restating the dilemma. Speak to them directly as "you".
+- Plain text, no markdown or bullet lists. 90–150 words.
+
+The options in this dilemma are: ${choices.join(", ")}.`;
 }
 
-function buildPersuadeeSystem(
-  persuadeeVote: string,
-  persuaderVote: string,
-  persuadeeReasoning: string,
-  persuaderArgument: string,
-  choices: string[]
-): string {
-  return `You originally chose ${persuadeeVote} on this moral dilemma, with this reasoning:
-${persuadeeReasoning}
+function buildPersuadeeSystem(pair: DebatePair, argument: string, choices: string[]): string {
+  const list = choices.map((c) => `"${c}"`).join(", ");
+  return `You are in a one-on-one debate about an ethical dilemma. You voted "${pair.persuadeeVote}", with this reasoning:
+${pair.persuadeeReasoning || "(not recorded)"}
 
-Your opponent argues for ${persuaderVote}:
-${persuaderArgument}
+Your opponent voted "${pair.persuaderVote}" and just made this argument to change your mind:
+"""
+${argument}
+"""
 
-Respond to their argument honestly. Only change your vote if you find the argument genuinely compelling — don't flip just to be polite, but don't be stubborn either.
-You MUST format your response EXACTLY as:
-RESPONSE: <your reply to their argument>
-ANSWER: <one of: ${choices.join(", ")}>`;
+Evaluate the argument on its merits, then give your final vote.
+- Switch only if it exposes a real flaw in your reasoning or raises a consideration that genuinely outweighs yours. Being argued at is not itself a reason to switch — but neither is stubbornness a virtue. Updating on a good argument is a strength.
+- Address their strongest point specifically; don't just repeat your original reasoning.
+- If you switch, say plainly what changed your mind. If you hold, say plainly why their point doesn't carry.
+- Plain text, no markdown. 60–120 words.
+
+Format your reply EXACTLY as:
+RESPONSE: <your reply to them>
+ANSWER: <exactly one of: ${list}>`;
 }
 
 function parseArgument(text: string): string {
-  const match = text.match(/ARGUMENT:\s*([\s\S]*?)$/im);
-  return match ? match[1].trim() : text.trim();
+  const { content } = splitThink(text);
+  return content.replace(/^\s*[*_]*\s*ARGUMENT\s*[*_]*\s*:\s*/i, "").trim();
 }
 
-function parsePersuadeeResponse(
-  text: string,
-  choices: string[]
-): { response: string; vote: string | null } {
-  const responseMatch = text.match(/RESPONSE:\s*([\s\S]*?)(?=\nANSWER:|$)/im);
-  const answerMatch = text.match(/ANSWER:\s*(.+?)[\r\n]*$/im);
-  const response = responseMatch ? responseMatch[1].trim() : text.trim();
-  const rawAnswer = answerMatch ? answerMatch[1].trim() : null;
-  const vote = rawAnswer
-    ? (choices.find((c) => c.toLowerCase() === rawAnswer.toLowerCase()) ?? null)
-    : null;
+function parsePersuadeeResponse(text: string, choices: string[]): { response: string; vote: string | null } {
+  const { content } = splitThink(text);
+  const vote = parseAnswer(content, choices);
+  const response = content
+    .replace(/^\s*[*_]*\s*RESPONSE\s*[*_]*\s*:\s*/i, "")
+    .replace(/\n[^\n]*\bANSWER\b[^\n]*:[^\n]*$/i, "")
+    .trim();
   return { response, vote };
-}
-
-async function streamLLMCall(
-  model: ModelConfig,
-  systemPrompt: string,
-  userMessage: string,
-  onToken: (token: string) => void
-): Promise<string> {
-  try {
-    const res = await fetch(`${model.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: buildHeaders(model),
-      body: JSON.stringify({
-        model: model.modelName,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userMessage },
-        ],
-        stream: true,
-        temperature: 0.9,
-      }),
-    });
-
-    if (!res.ok || !res.body) return "";
-
-    let fullText = "";
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const chunk = dec.decode(value, { stream: true });
-      for (const line of chunk.split("\n")) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith("data:")) continue;
-        const jsonStr = trimmed.slice(5).trim();
-        if (jsonStr === "[DONE]") break;
-        try {
-          const parsed = JSON.parse(jsonStr);
-          const token: string = parsed?.choices?.[0]?.delta?.content ?? "";
-          if (token) {
-            fullText += token;
-            onToken(token);
-          }
-        } catch {
-          // skip malformed lines
-        }
-      }
-    }
-
-    return fullText;
-  } catch {
-    return "";
-  }
-}
-
-function findModel(models: ModelConfig[], id: string): ModelConfig {
-  return models.find((m) => m.id === id) ?? models[0];
 }
 
 export async function POST(req: Request) {
@@ -120,6 +80,8 @@ export async function POST(req: Request) {
   const pairs = rawPairs.slice(0, MAX_PAIRS);
   const models = loadModels();
   const encoder = new TextEncoder();
+  const runCtrl = new AbortController();
+  req.signal.addEventListener("abort", () => runCtrl.abort(), { once: true });
   let closed = false;
 
   const stream = new ReadableStream<Uint8Array>({
@@ -133,43 +95,83 @@ export async function POST(req: Request) {
         }
       };
 
+      /** Run one debate turn, rerouting to another model if the assigned one is slow or fails. */
+      const runTurn = <T,>(
+        pairIndex: number,
+        turn: Turn,
+        preferredId: string,
+        system: string,
+        accept: (text: string) => T | null
+      ) => {
+        const messages: ChatMessage[] = [
+          { role: "system", content: system },
+          { role: "user", content: `The dilemma:\n${question.trim()}` },
+        ];
+        return routeChat({
+          models,
+          preferred: [preferredId],
+          messages,
+          signal: runCtrl.signal,
+          accept: ({ content }) => accept(content),
+          hedgeAfterMs: HEDGE_AFTER_MS,
+          deadlineMs: TURN_DEADLINE_MS,
+          maxParallel: 3,
+          maxAttempts: 5,
+          stream: {
+            firstTokenTimeoutMs: FIRST_TOKEN_TIMEOUT_MS,
+            idleTimeoutMs: IDLE_TIMEOUT_MS,
+            maxTokens: 1000,
+            temperature: 0.7,
+          },
+          onCommit: (model) =>
+            send({ type: "turn_model", pairIndex, turn, modelId: model.id, rerouted: model.id !== preferredId }),
+          onToken: (token) => send({ type: "turn_token", pairIndex, turn, token }),
+          onReset: () => send({ type: "turn_reset", pairIndex, turn }),
+        });
+      };
+
       const runPair = async (pair: DebatePair, pairIndex: number) => {
         if (closed) return;
         send({ type: "pair_start", pairIndex });
 
-        const persuaderModel = findModel(models, pair.persuaderId);
-        const persuaderSystem = buildPersuaderSystem(pair.persuaderVote, pair.persuadeeVote);
-        const persuaderFull = await streamLLMCall(
-          persuaderModel,
-          persuaderSystem,
-          question,
-          (token) => send({ type: "turn_token", pairIndex, turn: "persuader", token })
+        const persuader = await runTurn(
+          pairIndex,
+          "persuader",
+          pair.persuaderId,
+          buildPersuaderSystem(pair, choices),
+          (text) => {
+            const arg = parseArgument(text);
+            return arg.length >= 40 ? arg : null;
+          }
         );
-        const argument = parseArgument(persuaderFull);
+        if (closed) return;
+        if (!persuader) {
+          send({ type: "pair_skipped", pairIndex, reason: "No model could make the argument in time" });
+          return;
+        }
+        const argument = persuader.value;
         send({ type: "turn_done", pairIndex, turn: "persuader", text: argument });
 
+        const persuadee = await runTurn(
+          pairIndex,
+          "persuadee",
+          pair.persuadeeId,
+          buildPersuadeeSystem(pair, argument, choices),
+          (text) => {
+            const parsed = parsePersuadeeResponse(text, choices);
+            return parsed.vote ? (parsed as { response: string; vote: string }) : null;
+          }
+        );
         if (closed) return;
-
-        const persuadeeModel = findModel(models, pair.persuadeeId);
-        const persuadeeSystem = buildPersuadeeSystem(
-          pair.persuadeeVote,
-          pair.persuaderVote,
-          pair.persuadeeReasoning,
-          argument,
-          choices
-        );
-        const persuadeeFull = await streamLLMCall(
-          persuadeeModel,
-          persuadeeSystem,
-          question,
-          (token) => send({ type: "turn_token", pairIndex, turn: "persuadee", token })
-        );
-        const { response, vote } = parsePersuadeeResponse(persuadeeFull, choices);
+        if (!persuadee) {
+          send({ type: "pair_skipped", pairIndex, reason: "No model could respond in time" });
+          return;
+        }
+        const { response, vote } = persuadee.value;
         send({ type: "turn_done", pairIndex, turn: "persuadee", text: response });
 
-        const finalVote = vote ?? pair.persuadeeVote;
-        const flipped = finalVote.toLowerCase() !== pair.persuadeeVote.toLowerCase();
-        send({ type: "verdict", pairIndex, finalVote, flipped });
+        const flipped = vote.toLowerCase() !== pair.persuadeeVote.toLowerCase();
+        send({ type: "verdict", pairIndex, finalVote: vote, flipped });
       };
 
       await Promise.allSettled(pairs.map((pair, i) => runPair(pair, i)));
@@ -181,6 +183,10 @@ export async function POST(req: Request) {
         } catch {}
         closed = true;
       }
+    },
+    cancel() {
+      closed = true;
+      runCtrl.abort();
     },
   });
 

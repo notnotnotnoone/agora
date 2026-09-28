@@ -9,5 +9,7 @@ export interface HistoryRun {
     vote: string | null;
     reasoning: string;
     optionReasons: Record<string, string>;
+    rawText?: string;
+    thinking?: string;
   }>;
 }

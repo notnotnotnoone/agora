@@ -10,9 +10,36 @@ interface DebatePanelProps {
   choices: string[];
   persuaderName: string;
   persuadeeName: string;
+  /** Set when routing handed a turn to a different model than the one that voted. */
+  persuaderStandIn?: string | null;
+  persuadeeStandIn?: string | null;
 }
 
-export function DebatePanel({ pair, state, choices, persuaderName, persuadeeName }: DebatePanelProps) {
+function Speaker({ name, standIn, verb }: { name: string; standIn?: string | null; verb: string }) {
+  return (
+    <span className="text-xs text-muted-foreground">
+      {standIn ? (
+        <>
+          {standIn} <span className="italic">(standing in for {name})</span> {verb}
+        </>
+      ) : (
+        <>
+          {name} {verb}
+        </>
+      )}
+    </span>
+  );
+}
+
+export function DebatePanel({
+  pair,
+  state,
+  choices,
+  persuaderName,
+  persuadeeName,
+  persuaderStandIn,
+  persuadeeStandIn,
+}: DebatePanelProps) {
   const persuaderBadge = BADGE_COLORS[choiceIndex(pair.persuaderVote, choices)];
   const persuadeeBadge = BADGE_COLORS[choiceIndex(pair.persuadeeVote, choices)];
   const finalBadge = state.finalVote
@@ -49,14 +76,16 @@ export function DebatePanel({ pair, state, choices, persuaderName, persuadeeName
               transition={{ type: "spring", stiffness: 400, damping: 30 }}
               className="flex flex-col items-end gap-1"
             >
-              <span className="text-xs text-muted-foreground">{persuaderName} argues</span>
+              <Speaker name={persuaderName} standIn={persuaderStandIn} verb="argues" />
               <div className="max-w-[80%] rounded-2xl rounded-tr-sm bg-primary/10 border border-primary/20 px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap">
-                {state.persuaderDone ? (
+                {state.persuaderDone || state.persuaderText ? (
                   state.persuaderText || <span className="italic text-muted-foreground">(No response)</span>
+                ) : state.skipped ? (
+                  <span className="italic text-muted-foreground">skipped</span>
                 ) : (
                   <span className="italic text-muted-foreground animate-pulse">thinking…</span>
                 )}
-                {!state.persuaderDone && state.persuaderText && (
+                {!state.persuaderDone && !state.skipped && state.persuaderText && (
                   <span className="inline-block w-1 h-3 bg-foreground animate-pulse ml-0.5 align-middle" />
                 )}
               </div>
@@ -73,16 +102,36 @@ export function DebatePanel({ pair, state, choices, persuaderName, persuadeeName
               transition={{ type: "spring", stiffness: 400, damping: 30 }}
               className="flex flex-col items-start gap-1"
             >
-              <span className="text-xs text-muted-foreground">{persuadeeName} responds</span>
+              <Speaker name={persuadeeName} standIn={persuadeeStandIn} verb="responds" />
               <div className="max-w-[80%] rounded-2xl rounded-tl-sm bg-card border border-border px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap">
-                {state.persuadeeDone ? (
+                {state.persuadeeDone || state.persuadeeText ? (
                   state.persuadeeText || <span className="italic text-muted-foreground">(No response)</span>
+                ) : state.skipped ? (
+                  <span className="italic text-muted-foreground">skipped</span>
                 ) : (
                   <span className="italic text-muted-foreground animate-pulse">thinking…</span>
                 )}
-                {!state.persuadeeDone && state.persuadeeText && (
+                {!state.persuadeeDone && !state.skipped && state.persuadeeText && (
                   <span className="inline-block w-1 h-3 bg-foreground animate-pulse ml-0.5 align-middle" />
                 )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Skipped notice */}
+        <AnimatePresence>
+          {state.skipped && (
+            <motion.div
+              initial={{ opacity: 0, scale: 0.85 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="flex justify-center pt-2"
+            >
+              <div className="rounded-full border border-dashed border-border px-4 py-2 text-sm text-muted-foreground">
+                ⤼ {state.skipped} — {persuadeeName} keeps{" "}
+                <span className={`rounded px-1.5 py-0.5 text-xs font-semibold ${persuadeeBadge}`}>
+                  {pair.persuadeeVote}
+                </span>
               </div>
             </motion.div>
           )}

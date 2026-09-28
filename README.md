@@ -40,6 +40,13 @@ A single run is a four-stage pipeline, all streamed to the browser over Server-S
    the UI shows exactly who got persuaded. There's also a *symmetric* mode for a genuine
    two-way back-and-forth instead of pure persuasion.
 
+**Latency-aware routing.** Every request is routed to the healthiest model (fastest recent
+latency, not rate-limited, within its rpm budget). If a model hasn't answered within a few
+seconds, a backup request races it on a different model and the loser is cancelled; 429s, dead
+streams and unparseable replies fail over immediately. Round 1 wraps up with whatever it has at
+24s, and each Round 2 turn has a 13s budget — a debate turn that can't be served is rerouted to a
+stand-in model (labelled in the UI) or the pair is skipped. You can also skip pairs manually.
+
 Every run is saved to local **history**, so you can revisit or reload past debates.
 
 ## Features

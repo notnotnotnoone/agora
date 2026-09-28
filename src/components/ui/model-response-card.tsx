@@ -40,6 +40,40 @@ function StatusIcon({ status }: { status: ResponseEntry["status"] }) {
   return <Circle className="h-4 w-4 text-muted-foreground flex-shrink-0" />;
 }
 
+function DetailToggle({ label, text, defaultOpen = false }: { label: string; text: string; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const words = text.trim().split(/\s+/).length;
+  return (
+    <li className="flex flex-col gap-0.5">
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
+        className="self-start text-[10px] font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground transition-colors"
+      >
+        {open ? "▾" : "▸"} {label} <span className="font-normal normal-case">({words} words)</span>
+      </button>
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            className="overflow-hidden"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.2 }}
+          >
+            <p className="mt-1 max-h-80 overflow-y-auto rounded bg-muted/40 p-2 text-xs leading-relaxed text-muted-foreground whitespace-pre-wrap">
+              {text}
+            </p>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </li>
+  );
+}
+
 function ResponseRow({
   response,
   choices,
@@ -56,8 +90,11 @@ function ResponseRow({
 
   const hasOptionReasons =
     response.status === "done" &&
-    response.optionReasons &&
+    !!response.optionReasons &&
     Object.keys(response.optionReasons).length > 0;
+  const thinking = response.thinking?.trim() ?? "";
+  const reply = response.rawText?.trim() ?? "";
+  const hasDetails = hasOptionReasons || !!thinking || !!reply;
 
   return (
     <motion.li
@@ -67,8 +104,8 @@ function ResponseRow({
       transition={{ type: "spring", stiffness: 500, damping: 25 }}
     >
       <motion.div
-        className={`flex flex-1 items-center rounded-md p-1 ${hasOptionReasons ? "cursor-pointer" : "cursor-default"}`}
-        onClick={() => hasOptionReasons && setExpanded((p) => !p)}
+        className={`flex flex-1 items-center rounded-md p-1 ${hasDetails ? "cursor-pointer" : "cursor-default"}`}
+        onClick={() => hasDetails && setExpanded((p) => !p)}
         whileHover={{ backgroundColor: "rgba(0,0,0,0.03)" }}
       >
         <div className="mr-2">
@@ -104,7 +141,12 @@ function ResponseRow({
             <span className="text-yellow-700">no answer</span>
           )}
         </span>
-        {hasOptionReasons && (
+        {response.latencyMs !== undefined && (
+          <span className="text-[10px] text-muted-foreground ml-1 tabular-nums">
+            {(response.latencyMs / 1000).toFixed(1)}s
+          </span>
+        )}
+        {hasDetails && (
           <span className="text-xs text-muted-foreground ml-1">
             {expanded ? "▲" : "▼"}
           </span>
@@ -112,7 +154,7 @@ function ResponseRow({
       </motion.div>
 
       <AnimatePresence>
-        {hasOptionReasons && expanded && (
+        {hasDetails && expanded && (
           <motion.div
             className="mt-1 ml-1.5 border-l border-dashed border-foreground/20 pl-5 overflow-hidden"
             initial={{ opacity: 0, height: 0 }}
@@ -121,7 +163,7 @@ function ResponseRow({
             transition={{ duration: 0.2 }}
           >
             <ul className="py-1 space-y-2">
-              {choices.map((choice) => {
+              {hasOptionReasons && choices.map((choice) => {
                 const isChosen = choice.toLowerCase() === response.vote?.toLowerCase();
                 const reason = (response.optionReasons[choice] ?? "").trim();
                 const idx = choiceIndex(choice, choices);
@@ -141,6 +183,8 @@ function ResponseRow({
                   </li>
                 );
               })}
+              {thinking && <DetailToggle label="Model reasoning" text={thinking} />}
+              {reply && <DetailToggle label="Full reply" text={reply} defaultOpen={!hasOptionReasons} />}
             </ul>
           </motion.div>
         )}

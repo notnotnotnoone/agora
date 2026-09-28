@@ -53,13 +53,19 @@ function ExchangeView({
   exchange,
   mode,
   choices,
+  running,
+  onSkip,
 }: {
   pair: DebatePair;
   exchange: Exchange;
   mode: DebateMode;
   choices: string[];
+  running: boolean;
+  onSkip: () => void;
 }) {
   const { verdict } = exchange;
+  const [skipping, setSkipping] = useState(false);
+  const open = running && !verdict && !exchange.skipped;
   const [first, second] = mode === "symmetric" ? ["Side A", "Side B"] : ["Argues", "Replies"];
   return (
     <div className="exchange">
@@ -73,13 +79,19 @@ function ExchangeView({
           {exchange.turns.map((t, i) => {
             const side = pair[t.speaker];
             const switched = t.vote !== null && t.vote !== side.choice;
+            const standIn = t.standIn !== undefined;
             return (
               <li key={i} className={`turn turn-${t.speaker}`}>
                 <div className="turn-head">
                   <span className="n">{i + 1}</span>
-                  <span className="vote-model" title={side.model}>
-                    {modelName(side.model)}
+                  <span className="vote-model" title={standIn ? t.standIn || undefined : side.model}>
+                    {standIn ? (t.standIn ? modelName(t.standIn) : "rerouting…") : modelName(side.model)}
                   </span>
+                  {standIn && (
+                    <Tag tone="warn" title={`${modelName(side.model)} didn't answer in time, so flexrouter found a stand-in`}>
+                      for {modelName(side.model)}
+                    </Tag>
+                  )}
                   {t.vote && <ChoiceTag choices={choices} choice={t.vote} />}
                   {switched && <Tag tone="violet">switched</Tag>}
                 </div>
@@ -89,8 +101,25 @@ function ExchangeView({
           })}
         </ol>
       )}
+      {open && (
+        <div className="exchange-foot">
+          <span className="dim">{exchange.started ? "debating…" : "queued"}</span>
+          <span className="spacer" />
+          <button
+            className="btn ghost"
+            disabled={skipping}
+            onClick={() => {
+              setSkipping(true);
+              onSkip();
+            }}
+          >
+            {skipping ? "Skipping…" : "Skip"}
+          </button>
+        </div>
+      )}
       {verdict && (
         <div className="exchange-foot">
+          {exchange.skipped && <Tag title={exchange.skipped}>{exchange.skipped === "Skipped" ? "skipped" : "cut short"}</Tag>}
           <Outcome
             label={modelName(pair.persuader.model)}
             from={pair.persuader.choice}
@@ -114,10 +143,12 @@ export function Debate({
   state,
   live,
   onStart,
+  onSkip,
 }: {
   state: ArenaState;
   live: boolean;
   onStart: (mode: DebateMode) => void;
+  onSkip: (pair: number | "all") => void;
 }) {
   const { debate, choices } = state;
   const [mode, setMode] = useState<DebateMode>("persuade");
@@ -162,6 +193,7 @@ export function Debate({
   }
 
   const decided = debate.exchanges.filter((e) => e.verdict);
+  const remaining = debate.exchanges.filter((e) => !e.verdict && !e.skipped).length;
   const flips = decided.reduce(
     (n, e) => n + (e.verdict!.persuader.flipped ? 1 : 0) + (e.verdict!.persuadee.flipped ? 1 : 0),
     0
@@ -171,7 +203,18 @@ export function Debate({
     : `${debate.mode} · ${flips} mind${flips === 1 ? "" : "s"} changed in ${decided.length} match-up${decided.length === 1 ? "" : "s"}`;
 
   return (
-    <Box title="Round 2 · the debate" sub={sub} flush>
+    <Box
+      title="Round 2 · the debate"
+      sub={sub}
+      flush
+      action={
+        debate.running && remaining > 1 ? (
+          <button className="btn ghost" onClick={() => onSkip("all")}>
+            Skip remaining ({remaining})
+          </button>
+        ) : undefined
+      }
+    >
       {debate.error && (
         <p className="error-note" style={{ padding: 14 }}>
           {debate.error}
@@ -179,7 +222,15 @@ export function Debate({
       )}
       <div className="debate">
         {debate.pairs.map((pair, i) => (
-          <ExchangeView key={i} pair={pair} exchange={debate.exchanges[i]} mode={debate.mode} choices={choices} />
+          <ExchangeView
+            key={i}
+            pair={pair}
+            exchange={debate.exchanges[i]}
+            mode={debate.mode}
+            choices={choices}
+            running={debate.running}
+            onSkip={() => onSkip(i)}
+          />
         ))}
       </div>
     </Box>

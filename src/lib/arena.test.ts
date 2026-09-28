@@ -129,6 +129,54 @@ describe("arenaReducer", () => {
     ]);
   });
 
+  it("restarts a turn for a stand-in, names it, and marks skipped pairs", () => {
+    const pairs = [
+      {
+        persuader: { model: "a/1", choice: "YES", reasoning: "" },
+        persuadee: { model: "b/1", choice: "NO", reasoning: "" },
+      },
+    ];
+    const state = play([
+      start,
+      ...run({ type: "done" }),
+      { type: "debate_start", pairs, mode: "persuade" },
+      ...debate(
+        { type: "pair_start", pair: 0 },
+        { type: "turn_start", pair: 0, turn: 0, speaker: "persuader" },
+        { type: "turn_token", pair: 0, turn: 0, token: "half an arg" },
+        { type: "turn_standin", pair: 0, turn: 0, model: null },
+        { type: "turn_standin", pair: 0, turn: 0, model: "c/1" },
+        { type: "turn_token", pair: 0, turn: 0, token: "Pull" },
+        { type: "pair_skipped", pair: 0, reason: "Skipped" }
+      ),
+    ]);
+    const exchange = state.debate!.exchanges[0];
+    expect(exchange.turns[0]).toMatchObject({ text: "Pull", standIn: "c/1" });
+    expect(exchange.skipped).toBe("Skipped");
+  });
+
+  it("keeps a vote's reasoning trace", () => {
+    const state = play([
+      start,
+      ...run(
+        { type: "choices", choices: ["YES", "NO"] },
+        { type: "vote_start", slot: 0 },
+        {
+          type: "vote_done",
+          slot: 0,
+          choice: "YES",
+          reasons: {},
+          ms: 1,
+          usage: { in: 1, out: 1 },
+          requestId: null,
+          journey: null,
+          thinking: "hmm",
+        }
+      ),
+    ]);
+    expect(state.votes[0].thinking).toBe("hmm");
+  });
+
   it("saves only finished runs, and loads them back with the debate", () => {
     expect(toSavedRun(play([start]))).toBeNull();
     const pairs = [

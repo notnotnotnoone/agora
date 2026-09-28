@@ -22,6 +22,13 @@ describe("matchChoice", () => {
     expect(matchChoice("maybe", ["YES", "NO"])).toBeNull();
     expect(matchChoice(undefined, ["YES"])).toBeNull();
   });
+
+  it("takes an answer that starts with an option and explains itself, but not a longer word", () => {
+    expect(matchChoice("YES, because five lives", ["YES", "NO"])).toBe("YES");
+    expect(matchChoice("No!", ["YES", "NO"])).toBe("NO");
+    expect(matchChoice("YESTERDAY", ["YES", "NO"])).toBeNull();
+    expect(matchChoice("do nothing - it's wrong", ["DO", "DO NOTHING"])).toBe("DO NOTHING");
+  });
 });
 
 describe("parseVote", () => {

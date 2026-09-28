@@ -19,7 +19,7 @@ import { Box } from "./ui";
 const USABLE = new Set(["ready", "busy", "struggling"]);
 
 export function Arena() {
-  const { state, live, start, stop, startDebate, load } = useArena();
+  const { state, live, start, stop, startDebate, skipPair, load } = useArena();
   const snapshot = useFlexrouter();
   const [historyOpen, setHistoryOpen] = useState(false);
   const busy = live || (state.debate?.running ?? false);
@@ -75,7 +75,7 @@ export function Arena() {
           <Consensus state={state} />
           <VoteGrid state={state} />
           <Summary state={state} />
-          <Debate state={state} live={busy} onStart={startDebate} />
+          <Debate state={state} live={busy} onStart={startDebate} onSkip={skipPair} />
         </div>
         <div className="stack aside">
           <RoutingPanel snapshot={snapshot} state={state} />
